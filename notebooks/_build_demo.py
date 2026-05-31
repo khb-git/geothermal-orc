@@ -2,6 +2,7 @@
 
 Run from the repo root:  python notebooks/_build_demo.py
 Then execute:            jupyter nbconvert --to notebook --execute --inplace notebooks/demo.ipynb
+Then finalize:           python notebooks/_finalize_demo.py
 """
 import nbformat as nbf
 from nbformat.v4 import new_notebook, new_markdown_cell, new_code_cell
@@ -18,33 +19,36 @@ def code(src):
     cells.append(new_code_cell(src))
 
 
-# ----------------------------------------------------------------------------- #
-md(r"""# Geothermal Binary ORC Simulator — Demonstration
+def takeaway(text):
+    cells.append(new_markdown_cell("> **Takeaway —** " + text))
+
+
+# ============================================================================ #
+md(r"""# From a Hot Well to Watts
+
+### Designing a subcritical binary geothermal power plant, end to end
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/khb-git/geothermal-orc/blob/main/notebooks/demo.ipynb)
 &nbsp;
 [![View on nbviewer](https://raw.githubusercontent.com/jupyter/design/master/logos/Badges/nbviewer_badge.svg)](https://nbviewer.org/github/khb-git/geothermal-orc/blob/main/notebooks/demo.ipynb)
 
-**`geothermal-orc`** is a single, deep implementation of a subcritical binary
-(Organic Rankine Cycle) geothermal power plant, built for literature-grade
-rigor. This notebook walks the full modelling chain:
+**The question this notebook answers.** You are handed one geothermal well. It
+produces **100 kg/s of 150 °C brine**. How much electricity can you pull from
+it — with which working fluid, at what design point, and how does that hold up
+over thirty years of production?
 
-1. Working-fluid library with environmental screening (ODP / GWP / ASHRAE safety)
-2. The four-point ORC cycle and its *T*–*s* diagram
-3. The evaporator pinch via a swept *T*–*Q* profile
-4. Resource coupling — sizing the plant to a brine stream with closed
-   **energy and exergy** balances
-5. Evaporation-temperature **optimization** and multi-fluid **screening**
-6. **Silica scaling** chemistry and the reinjection-temperature floor
-7. **Resource thermal decline** over field life
+We will build the answer one layer at a time, using the
+[`geothermal-orc`](https://github.com/khb-git/geothermal-orc) package. Each
+section opens with a plain question and answers it in words; the equations,
+correlations, and validation numbers sit alongside for readers who want to check
+the engineering. No mathematics is required to follow the story.
 
 **Literature anchors.** Cycle conventions follow DiPippo, *Geothermal Power
-Plants* (2016); fluid screening follows Saleh et al. (2007); silica solubility
-uses Fournier & Rowe (1977); decline rates follow Snyder et al. (2017).
-Throughout, computed numbers are cross-checked against published values, and
-the notebook is explicit about which checks are hard validations versus
-order-of-magnitude plausibility checks.
-""")
+Plants* (2016); working-fluid screening follows Saleh et al. (2007); silica
+solubility uses Fournier & Rowe (1977); thermal-decline rates follow Snyder et
+al. (2017). Computed numbers are cross-checked against published values, and the
+notebook is explicit about which checks are hard validations versus plausibility
+checks.""")
 
 code(r"""# Setup. On Colab / Binder this installs the package; locally it is a no-op.
 try:
@@ -75,15 +79,116 @@ plt.rcParams.update({
 print("geothermal-orc version:", g.__version__)
 print("fluids in library:", len(LIBRARY))""")
 
-# ----------------------------------------------------------------------------- #
-md(r"""## 1. Working-fluid library and environmental screening
+# ============================================================================ #
+# ACT 1
+md(r"""## Act 1 · A hot well, and a problem
 
-The library carries each fluid's critical point, normal boiling point,
-ASHRAE-34 safety class, ozone-depletion potential (ODP), 100-year global-warming
-potential (GWP), and a **wet / dry / isentropic** classification of its
-saturation-vapour curve. The classifier measures the slope d*s*/d*T* along the
-saturated-vapour line near 0.7·*T*c; dry and isentropic fluids are preferred for
-binary plants because they leave the turbine without forming damaging liquid.""")
+A geothermal resource is, in the end, a stream of hot water. Drill into the
+right formation and you get brine at some temperature the geology decided for
+you — here, 150 °C. That is the whole fuel supply: you cannot turn it up, and
+when you are done extracting heat you must pump the brine back underground to
+keep the reservoir pressured and the dissolved minerals contained.
+
+At 150 °C the brine is too cool to make much steam, so a **flash** plant (boil
+the brine itself and run the steam through a turbine) is a poor fit. The answer
+is a **binary** plant. The brine never touches the turbine. Instead it heats a
+*second* fluid — an organic working fluid with a low boiling point — in a heat
+exchanger. That organic fluid boils, drives the turbine, condenses, and is
+pumped back to do it again, in a sealed loop. This is an **Organic Rankine
+Cycle (ORC)**: same idea as the steam Rankine cycle in a coal plant, but with a
+fluid chosen to boil at the temperatures a moderate geothermal resource can
+reach.
+
+The schematic below shows the two loops. The **brine loop** (red) runs from the
+production well, through the evaporator, to the reinjection well. The closed
+**ORC loop** (teal) carries the organic fluid through its four states — pump,
+evaporator, turbine, condenser — the same numbering we use everywhere
+below.""")
+
+code(r"""from matplotlib.patches import FancyBboxPatch, FancyArrowPatch, Circle
+
+RED, TEAL, INK, STEEL = "#8b3a1f", "#2a7d6f", "#1a1f2b", "#457b9d"
+
+fig, ax = plt.subplots(figsize=(9.6, 5.4))
+ax.set_xlim(0, 12); ax.set_ylim(0, 7); ax.axis("off"); ax.set_aspect("equal")
+
+
+def box(x, y, w, h, label, ec):
+    ax.add_patch(FancyBboxPatch((x, y), w, h,
+                 boxstyle="round,pad=0.02,rounding_size=0.12",
+                 linewidth=1.6, edgecolor=ec, facecolor="white", zorder=2))
+    ax.text(x + w / 2, y + h / 2, label, ha="center", va="center",
+            fontsize=10.5, color=INK, zorder=3)
+
+
+def arrow(p0, p1, color, lw=2.3):
+    ax.add_patch(FancyArrowPatch(p0, p1, arrowstyle="-|>", mutation_scale=16,
+                 lw=lw, color=color, zorder=1))
+
+
+def badge(x, y, n):
+    ax.add_patch(Circle((x, y), 0.24, color=INK, zorder=4))
+    ax.text(x, y, str(n), color="white", ha="center", va="center",
+            fontsize=9.5, zorder=5, fontweight="bold")
+
+
+box(0.4, 4.3, 2.0, 1.0, "Production\nwell", RED)
+box(0.4, 1.4, 2.0, 1.0, "Reinjection\nwell", RED)
+box(4.2, 3.0, 2.2, 1.6, "Evaporator", TEAL)
+box(7.6, 4.7, 2.6, 1.1, "Turbine +\nGenerator", TEAL)
+box(7.9, 1.4, 2.3, 1.3, "Condenser", TEAL)
+box(4.4, 1.4, 1.8, 1.0, "Feed pump", TEAL)
+
+# brine loop (red)
+arrow((2.4, 4.8), (4.2, 4.25), RED)
+arrow((4.2, 3.25), (2.4, 1.95), RED)
+ax.text(2.55, 4.95, "150 °C brine", color=RED, fontsize=9)
+ax.text(2.75, 2.45, "reinjected", color=RED, fontsize=9)
+
+# ORC loop (teal) with DiPippo state numbers
+arrow((6.4, 4.35), (7.6, 5.0), TEAL)    # evap -> turbine (3, vapour)
+arrow((9.1, 4.7), (9.1, 2.72), TEAL)    # turbine -> condenser (4)
+arrow((7.9, 2.0), (6.25, 1.9), TEAL)    # condenser -> pump (1)
+arrow((5.3, 2.4), (5.3, 2.98), TEAL)    # pump -> evaporator (2)
+badge(7.0, 4.78, 3); badge(9.1, 3.6, 4); badge(7.05, 1.78, 1); badge(5.3, 2.72, 2)
+
+# outputs
+arrow((10.2, 5.25), (11.5, 5.25), STEEL)
+ax.text(10.35, 5.55, "electricity", color=STEEL, fontsize=9)
+arrow((9.05, 1.4), (9.05, 0.5), STEEL)
+ax.text(9.25, 0.75, "to cooling", color=STEEL, fontsize=9)
+
+ax.set_title("Binary geothermal plant — brine loop (red) drives a closed ORC loop (teal)",
+             fontsize=12, color=INK, pad=6)
+plt.tight_layout(); plt.show()""")
+
+takeaway(r"""A geothermal plant must live within its resource: the brine is
+finite, must be reinjected, and its temperature is fixed by geology — not chosen
+by the engineer. Everything that follows is the consequence of that one
+constraint.""")
+
+# ============================================================================ #
+# ACT 2
+md(r"""## Act 2 · Which fluid should carry the heat?
+
+The first design lever is the organic fluid itself. Three things matter.
+
+First, the **shape of its saturation curve**. Plot temperature against entropy
+and every fluid traces a dome; what matters is the slope of the vapour side. A
+*wet* fluid (like water or ammonia) turns partly back to liquid as it expands
+through the turbine — droplets that erode the blades. A *dry* or *isentropic*
+fluid leaves the turbine as superheated vapour, dry and safe. Binary plants want
+dry or isentropic fluids. The package classifies each fluid by measuring the
+slope d*s*/d*T* along the saturated-vapour line near 0.7·*T*c.
+
+Second, **environment and safety**: ozone-depletion potential (ODP), 100-year
+global-warming potential (GWP), and the ASHRAE-34 safety class (flammability and
+toxicity).
+
+Third, the **temperature fit** — the critical temperature has to sit sensibly
+above the resource so the fluid can boil subcritically.
+
+Here is the library the package ships with.""")
 
 code(r"""import pandas as pd
 
@@ -99,10 +204,9 @@ for f in sorted(LIBRARY.values(), key=lambda x: x.Tcrit):
 df = pd.DataFrame(rows)
 df""")
 
-md(r"""**Screening.** A common modern screen keeps fluids that are not strongly
-*wet*, have zero ODP, and modest GWP. `screen()` applies such criteria; here we
-keep dry / isentropic fluids with GWP100 below 150 (the EU F-gas threshold
-often cited for new equipment).""")
+md(r"""**Screening.** A modern screen keeps fluids that are not strongly *wet*,
+have zero ODP, and modest GWP. Below we keep dry / isentropic fluids with GWP100
+under 150 — the threshold often cited for new equipment under F-gas rules.""")
 
 code(r"""kept = screen(max_gwp=150, max_odp=0.0, slope_types=["dry", "isentropic"])
 print("passed screen:", [f.display_name for f in kept])
@@ -118,10 +222,17 @@ ax.set_ylabel("GWP$_{100}$"); ax.set_yscale("log")
 ax.set_title("Working-fluid GWP (green = passes screen)")
 plt.xticks(rotation=60, ha="right"); ax.legend(); plt.tight_layout(); plt.show()""")
 
-# ----------------------------------------------------------------------------- #
-md(r"""## 2. The binary ORC cycle and its *T*–*s* diagram
+takeaway(r"""Dry fluids that expand to superheated vapour protect the turbine.
+**Isobutane** is the classic binary workhorse and our protagonist from here on —
+but the screen also clears the low-GWP HFOs, and we will let the numbers pick the
+winner later.""")
 
-State-point numbering follows DiPippo (2016):
+# ============================================================================ #
+# ACT 3
+md(r"""## Act 3 · The cycle — and why efficiency is not the point
+
+With a fluid chosen, draw the cycle. Following DiPippo's convention, the working
+fluid passes through four states:
 
 | point | location | condition |
 |------|----------|-----------|
@@ -130,8 +241,10 @@ State-point numbering follows DiPippo (2016):
 | 3 | evaporator outlet / turbine inlet | saturated (or superheated) vapour |
 | 4 | turbine outlet / condenser inlet | two-phase or superheated at $P_\text{cond}$ |
 
-We use **isobutane** (R600a), a workhorse binary fluid, evaporating at 120 °C
-and condensing at 30 °C, with realistic pump/turbine efficiencies.""")
+We run isobutane evaporating at 120 °C and condensing at 30 °C, with realistic
+pump and turbine efficiencies. The solver reports the per-kilogram work and a
+thermal efficiency — and, importantly, the turbine-exit quality, which confirms
+the expansion ends dry.""")
 
 code(r"""cyc = ORCCycle("Isobutane", T_evap_C=120.0, T_cond_C=30.0,
                eta_pump=0.75, eta_turbine=0.80)
@@ -139,6 +252,12 @@ res = cyc.solve()
 print(res.summary())
 print(f"\nturbine exit quality Q4 = {res.turbine_exit_quality:.3f} "
       f"(-1 means superheated -> 'dry' expansion, no droplets)")""")
+
+md(r"""The *T*–*s* diagram below traces the actual process paths, not just
+straight lines between the state points: the **2 → 3** leg heats the liquid and
+then runs flat across the top of the dome as the fluid boils at 120 °C, and the
+**4 → 1** leg desuperheats and then condenses flat at 30 °C. Point 4 sits
+*outside* the dome — the dry-expansion signature from Act 2.""")
 
 code(r"""# Saturation dome + cycle path on T-s axes.
 fluid = "Isobutane"
@@ -185,15 +304,28 @@ ax.set_ylabel("temperature  [°C]")
 ax.set_title(f"{fluid} ORC — T–s diagram (120 °C / 30 °C)")
 ax.legend(); plt.tight_layout(); plt.show()""")
 
-# ----------------------------------------------------------------------------- #
-md(r"""## 3. Evaporator pinch and the *T*–*Q* diagram
+takeaway(r"""Cycle efficiency measures *quality per kilogram*. It does not, by
+itself, tell you megawatts — for that the cycle has to meet the resource, which
+is the next move.""")
 
-The evaporator is the component where a terminal-only LMTD check fails: as the
-working fluid reaches its bubble point its temperature plateaus, so the minimum
-hot–cold approach (the **pinch**) usually sits *inside* the exchanger rather
-than at either end. `counterflow_profile` sweeps the exchanger by duty so the
-pinch is found correctly. We couple to a 150 °C brine at 100 kg/s and size the
-working-fluid flow so the pinch equals 5 K.""")
+# ============================================================================ #
+# ACT 4
+md(r"""## Act 4 · Where the heat actually moves — the pinch
+
+Here is the question that trips up a first design: *how much organic fluid can a
+given brine stream boil?* The naive answer uses a single average temperature
+difference. It is wrong, and the reason is the evaporator.
+
+As the organic fluid reaches its boiling point its temperature stops rising — it
+plateaus while it absorbs latent heat — even though the brine keeps cooling
+along the exchanger. So the smallest gap between the two streams, the **pinch**,
+sits *inside* the exchanger, at the fluid's bubble point, not at either end. Size
+the plant on an end-to-end average and you would silently violate the pinch and
+overstate the power.
+
+`counterflow_profile` sweeps the exchanger by duty to find the pinch correctly.
+Below we couple the cycle to our 150 °C / 100 kg/s brine and size the
+working-fluid flow so the pinch is exactly 5 K.""")
 
 code(r"""full = cyc.solve_with_resource(m_brine=100.0, T_brine_in_C=150.0,
                                pinch_evap=5.0)
@@ -217,19 +349,27 @@ ax.set_xlabel("cumulative duty  [MW]"); ax.set_ylabel("temperature  [°C]")
 ax.set_title("Evaporator T–Q profile (pinch sits at the bubble point)")
 ax.legend(); plt.tight_layout(); plt.show()""")
 
-# ----------------------------------------------------------------------------- #
-md(r"""## 4. Resource coupling — energy and exergy balances
+takeaway(r"""The pinch, not the cycle, sets how much working fluid the brine can
+boil — and therefore the power. It is the hinge between a textbook cycle and a
+real plant.""")
 
-With the plant sized to the brine, the solver assembles full **rate** balances
-and checks closure. Two checks are reported:
+# ============================================================================ #
+# ACT 5
+md(r"""## Act 5 · So, how many megawatts?
+
+Now the plant is sized to the brine, so we can finally answer the opening
+question for a single design — and check our own arithmetic. The solver assembles
+full **rate** balances and verifies two things:
 
 * **Energy:** $Q_\text{in} - Q_\text{out} - W_\text{net} = 0$
 * **Exergy:** $\dot E_\text{in} = W_\text{net} + \dot E_\text{out} +
-  \sum \dot E_\text{dest}$
+  \sum \dot E_\text{dest}$, with each component's destruction computed as
+  $T_0\,\dot S_\text{gen}$.
 
-with exergy destruction per component computed as $T_0\,\dot S_\text{gen}$. Both
-residuals should close to machine precision — that is the core correctness
-guarantee the test-suite asserts.""")
+The **utilization efficiency** is the one a geothermal engineer cares about: not
+heat-to-work, but how much of the brine's *available work* (its exergy relative
+to the surroundings) the plant actually captures. Both residuals closing to
+machine precision is the correctness guarantee the test-suite enforces.""")
 
 code(r"""print(f"W_net            = {full.W_net/1e6:7.3f} MW")
 print(f"Q_in             = {full.Q_in/1e6:7.3f} MW")
@@ -239,6 +379,9 @@ print(f"thermal eff.     = {full.eta_th*100:6.2f} %")
 print()
 print(f"energy residual  = {full.energy_balance_residual:.2e}")
 print(f"exergy residual  = {full.exergy_balance_residual:.2e}")""")
+
+md(r"""Exergy accounting also shows *where* the recoverable work is lost — which
+components to improve first.""")
 
 code(r"""ed = full.exergy_destruction
 comp = list(ed.keys()); vals = [ed[c] / 1e3 for c in comp]
@@ -253,13 +396,18 @@ ax.set_ylabel("exergy destruction  [kW]")
 ax.set_title("Where the available work is lost")
 plt.tight_layout(); plt.show()""")
 
-# ----------------------------------------------------------------------------- #
-md(r"""## 5. Optimizing the evaporation temperature
+takeaway(r"""Energy and exergy balances close to machine precision, so the model
+is internally honest — and the exergy ledger points at the evaporator and turbine
+as the losses worth attacking.""")
 
-Net power is non-monotonic in evaporation temperature: raising it lifts cycle
-efficiency but shrinks the working-fluid flow the brine can support (the pinch
-tightens). The optimum sits in between. We sweep $T_\text{evap}$ and overlay the
-optimizer's result.""")
+# ============================================================================ #
+# ACT 6
+md(r"""## Act 6 · Tuning the design, and reconsidering the fluid
+
+The 120 °C design point was a guess. Net power is **non-monotonic** in
+evaporation temperature: raising it lifts cycle efficiency but tightens the
+pinch, so the brine can boil less fluid. The best design sits between those
+pulls. We sweep the evaporation temperature and overlay the optimizer.""")
 
 code(r"""resource = GeothermalResource(T_reservoir_C=150.0, mass_flow=100.0)
 
@@ -289,12 +437,9 @@ ax.set_ylabel("net power  [MW]")
 ax.set_title("Net power vs evaporation temperature (Isobutane, 150 °C brine)")
 ax.legend(); plt.tight_layout(); plt.show()""")
 
-# ----------------------------------------------------------------------------- #
-md(r"""## 6. Multi-fluid screening at the resource
-
-Each candidate fluid is independently optimized over its evaporation
-temperature, then ranked by net power. This is the practical output a designer
-wants: *for this brine, which fluid wins, and by how much?*""")
+md(r"""And the fluid choice deserves a second look now that we can score it on
+*power for this resource* rather than on properties alone. Each candidate is
+independently optimized over its own evaporation temperature, then ranked.""")
 
 code(r"""candidates = ["Propane", "Isobutane", "n-Butane",
               "Isopentane", "n-Pentane", "R245fa"]
@@ -313,18 +458,24 @@ ax.set_xlabel("optimized net power  [MW]")
 ax.set_title("Fluid screening on a 150 °C / 100 kg/s brine")
 plt.tight_layout(); plt.show()""")
 
-# ----------------------------------------------------------------------------- #
-md(r"""## 7. Silica scaling and the reinjection floor
+takeaway(r"""Tuning the boiling temperature and re-scoring fluids buys hundreds
+of kilowatts — extra power from better design rather than a bigger resource. The
+ranking is by raw power; safety and cost still get a vote.""")
 
-Dissolved silica limits how cold the brine may be reinjected: cool it too far
-and amorphous silica supersaturates and scales the injection system. The model
-uses Fournier & Rowe (1977):
+# ============================================================================ #
+# ACT 7
+md(r"""## Act 7 · The limits reality imposes — silica and decline
+
+Two constraints turn this point design into something that survives in the field.
+
+**How cold may the brine be reinjected?** Cool brine holds less dissolved silica;
+push it too cold and amorphous silica supersaturates and scales the injection
+wells and piping shut. The floor comes from Fournier & Rowe (1977):
 
 $$\log_{10} C = -\tfrac{731}{T} + 4.52 \quad\text{(amorphous, mg/kg, }T\text{ in K)}$$
 $$\log_{10} C = -\tfrac{1309}{T} + 5.19 \quad\text{(quartz)}$$
 
-**Validation against literature.** The table below compares computed
-solubilities with published values.""")
+The package's solubilities are validated against published values below.""")
 
 code(r"""checks = [
     ("amorphous", amorphous_silica_solubility, 25.0, "115–120"),
@@ -364,15 +515,12 @@ ax.legend(); plt.tight_layout(); plt.show()
 print(f"200 °C reservoir, quartz-equilibrium silica = {C_res:.1f} mg/kg")
 print(f"amorphous-saturation (SI=1) reinjection floor = {T_floor:.1f} °C")""")
 
-# ----------------------------------------------------------------------------- #
-md(r"""## 8. Resource thermal decline over field life
-
-Production temperature falls as the reservoir is mined of heat. Snyder et al.
-(2017), analysing operating US binary and flash plants, found most wells decline
-**linearly**, averaging roughly **0.5 %/yr for binary** and **0.8 %/yr for
-flash**. The defaults encode those rates; here we propagate a 150 °C binary
-resource over 30 years and translate the temperature decline into optimized
-plant power.""")
+md(r"""**And the resource does not last forever.** As heat is mined the
+production temperature drifts down. Snyder et al. (2017), analysing operating US
+plants, found most wells decline roughly **linearly**, near **0.5 %/yr for
+binary** and **0.8 %/yr for flash**. Propagating our 150 °C binary resource over
+thirty years — and re-optimizing the plant as it cools — shows how the power
+fades.""")
 
 code(r"""years = np.arange(0, 31)
 binary = GeothermalResource(T_reservoir_C=150.0, mass_flow=100.0,
@@ -408,18 +556,81 @@ print("year :  T[C]  ->  P[MW]")
 for y, p in zip(sample_years, P_years):
     print(f"{y:4d} : {binary.temperature_at(y):6.1f}  -> {p:6.3f}")""")
 
-# ----------------------------------------------------------------------------- #
-md(r"""## 9. Interactive design explorer
+takeaway(r"""Silica sets *how cold* you may run the brine; decline sets *how
+long* the power lasts. Both bound the design as firmly as the thermodynamics
+do.""")
 
-The cell below defines `plot_design`, which — for a chosen working fluid, brine
-inlet temperature, condensing temperature, and pinch — runs a quick internal
-search over evaporation temperature, then reports net power, utilization
-efficiency, brine outlet temperature, and the evaporator *T*–*Q* diagram. The
-static figure here is the default configuration (isobutane, 150 °C brine).
+# ============================================================================ #
+# ACT 8
+md(r"""## Act 8 · The verdict for our 150 °C well
 
-**To move the controls live**, open this notebook in Colab (badge at the top)
-and run all cells; the cell after this one turns these four inputs into
-sliders. GitHub shows a static frame because its viewer cannot run a kernel.""")
+Pulling the threads together for the well we started with — 100 kg/s of 150 °C
+brine, condensing at 30 °C, 5 K pinch. The card below states the recommended
+design, the power it makes, how much of the brine's available work that
+represents, where the brine leaves, and how the output holds up over the field's
+life.""")
+
+code(r"""# Re-solve isobutane at its own optimum for a self-consistent verdict.
+best_design = ORCCycle("Isobutane", T_evap_C=opt.T_evap_opt_C, T_cond_C=30.0
+                       ).solve_with_resource(m_brine=100.0, T_brine_in_C=150.0,
+                                             pinch_evap=5.0)
+win = ranked[0]
+drop = (P_years[-1] / P_years[0] - 1) * 100.0
+
+fig, (axL, axR) = plt.subplots(1, 2, figsize=(11, 4.0),
+                               gridspec_kw={"width_ratios": [1.2, 1]})
+axL.axis("off"); axL.set_xlim(0, 1); axL.set_ylim(0, 1)
+axL.text(0, 1.02, "Design verdict", fontsize=15, fontweight="bold",
+         color="#8b3a1f", va="top")
+rowiter = [
+    ("Resource", "150 °C brine, 100 kg/s"),
+    ("Best fluid (raw power)",
+     f"{win.fluid} — {win.W_net_opt/1e6:.2f} MW @ {win.T_evap_opt_C:.0f} °C"),
+    ("Isobutane optimum",
+     f"{opt.W_net_opt/1e6:.2f} MW @ {opt.T_evap_opt_C:.0f} °C"),
+    ("Utilization efficiency",
+     f"{best_design.eta_utilization*100:.0f}% of brine exergy"),
+    ("Working-fluid flow", f"{best_design.m_wf:.0f} kg/s"),
+    ("Brine reinjected at", f"{best_design.brine_T_out-273.15:.0f} °C"),
+    ("Power at year 30", f"{P_years[-1]:.2f} MW ({drop:+.0f}% vs year 0)"),
+]
+y = 0.88
+for k, v in rowiter:
+    axL.text(0.0, y, k, fontsize=10.5, color="#6b7280", va="top")
+    axL.text(0.46, y, v, fontsize=11, color="#1a1f2b", va="top",
+             fontweight="medium")
+    y -= 0.145
+
+axR.plot(sample_years, P_years, "o-", color="#457b9d", lw=2.2)
+axR.fill_between(sample_years, P_years, color="#457b9d", alpha=0.08)
+for x, p in zip(sample_years, P_years):
+    axR.text(x, p + max(P_years) * 0.02, f"{p:.2f}", ha="center", fontsize=9,
+             color="#1a1f2b")
+axR.set_xlabel("year"); axR.set_ylabel("net power  [MW]")
+axR.set_title("30-year outlook (binary decline)", fontsize=11)
+axR.set_ylim(0, max(P_years) * 1.2)
+plt.tight_layout(); plt.show()""")
+
+md(r"""So the honest answer to the opening question: a binary plant on this well
+makes roughly **4 MW**, captures nearly **half** of the brine's available work
+(≈ 48 %), and reinjects comfortably above the silica-scaling floor. Over thirty
+years its output falls by about **40 %** — and note the leverage: a ~15 %
+decline in resource temperature drives a far steeper drop in power, because the
+brine's available work scales faster than its temperature. **Propane** edges
+isobutane on raw power (its lower critical temperature lets the brine boil more
+fluid), but its A3 flammability is a real plant-safety cost — exactly the kind of
+trade a screen surfaces and an engineer, not an optimizer, decides.""")
+
+# ============================================================================ #
+# ACT 9
+md(r"""## Act 9 · Your turn — change the resource
+
+The function below is the whole pipeline in miniature: give it a fluid, brine
+temperature, condensing temperature, and pinch, and it finds a near-optimal
+design and draws the evaporator. The static figure is the default case. **In
+Colab (badge at the top), run all cells** and the next cell turns these inputs
+into live sliders — GitHub's static viewer cannot run a kernel, so it shows a
+fixed frame.""")
 
 code(r"""def plot_design(fluid="Isobutane", T_brine=150.0, T_cond=30.0, pinch=5.0):
     # Quick near-optimal design for a 100 kg/s brine, with a T-Q plot.
@@ -462,25 +673,27 @@ code(r"""def plot_design(fluid="Isobutane", T_brine=150.0, T_cond=30.0, pinch=5.
 # Static default configuration (this frame is what GitHub shows).
 plot_design()""")
 
-# ----------------------------------------------------------------------------- #
-md(r"""## Summary
+# ============================================================================ #
+md(r"""## How we know it is right — validation & references
 
-The simulator carries a geothermal binary plant from a working-fluid choice
-through cycle thermodynamics, evaporator pinch analysis, resource-coupled
-energy/exergy balances, evaporation-temperature optimization and fluid
-screening, and the two chemistry/longevity constraints that bound real
-designs — silica scaling and thermal decline.
+The story is only as good as the numbers under it. This package is explicit
+about what is *validated* versus what is *plausible*:
 
-**Validation status (transparent):**
+**Hard validations** (matched to published values):
 
-* **Hard validations** — silica solubilities (amorphous & quartz) and the
-  quartz geothermometer round-trip match Fournier & Rowe to within a few
-  mg/kg; energy and exergy balances close to machine precision; fluid
-  wet/dry/isentropic classes match the literature consensus.
-* **Plausibility checks** — absolute plant net power, utilization efficiency,
-  and brine outlet temperatures fall in the ranges reported by DiPippo for
-  comparable 150 °C binary resources, but are not matched to a specific named
-  plant.
+* Amorphous and quartz silica solubilities reproduce Fournier & Rowe (1977) to
+  within a few mg/kg, and the quartz geothermometer round-trips
+  (200 °C → ~265 mg/kg → ~201 °C).
+* Energy and exergy balances on every resource-coupled solve close to machine
+  precision.
+* Wet / dry / isentropic fluid classes agree with the literature consensus.
+
+**Plausibility checks** (right physics, right range — not matched to a named
+plant):
+
+* Absolute net power, utilization efficiency, and brine outlet temperatures fall
+  within ranges DiPippo reports for comparable ~150 °C binary resources.
+* Decline uses the Snyder et al. (2017) averages; an individual field can differ.
 
 **References**
 
@@ -490,8 +703,8 @@ designs — silica scaling and thermal decline.
   low-temperature organic Rankine cycles," *Energy* 32 (2007) 1210–1221.
 * R. O. Fournier, J. J. Rowe, "The solubility of amorphous silica in water at
   high temperatures and high pressures," *Am. Mineral.* 62 (1977) 1052–1056.
-* D. M. Snyder, K. F. Beckers, K. R. Young, "Update on geothermal
-  direct-use and power-plant thermal decline," *GRC Transactions* 41 (2017).
+* D. M. Snyder, K. F. Beckers, K. R. Young, "Update on geothermal direct-use and
+  power-plant thermal decline," *GRC Transactions* 41 (2017).
 """)
 
 nb["cells"] = cells
