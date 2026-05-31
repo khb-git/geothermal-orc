@@ -148,19 +148,38 @@ s_liq = [PropsSI("S", "T", T, "Q", 0, fluid) for T in Ts]
 s_vap = [PropsSI("S", "T", T, "Q", 1, fluid) for T in Ts]
 
 st = res.states
-order = [1, 2, 3, 4, 1]
-s_pts = [st[i].s for i in order]
-T_pts = [st[i].T for i in order]
+P_evap, P_cond = st[2].P, st[1].P
+
+
+def _isobar(P, h0, h1, n=80):
+    # Trace an isobaric leg by sampling enthalpy: gives liquid-heating +
+    # flat evaporation (or desuperheat + flat condensation) across the dome.
+    hs = np.linspace(h0, h1, n)
+    T = np.array([PropsSI("T", "P", P, "H", float(h), fluid) for h in hs])
+    s = np.array([PropsSI("S", "P", P, "H", float(h), fluid) for h in hs])
+    return s, T
+
+
+# 2 -> 3 isobaric heating at P_evap; 4 -> 1 isobaric cooling at P_cond.
+s23, T23 = _isobar(P_evap, st[2].h, st[3].h)
+s41, T41 = _isobar(P_cond, st[4].h, st[1].h)
+
+# Full loop: 1 --(pump)--> 2 --(evaporate)--> 3 --(turbine)--> 4 --(condense)--> 1
+# (pump 1->2 and turbine 3->4 are drawn as straight segments).
+s_path = np.concatenate([[st[1].s], s23, [st[4].s], s41]) / 1e3
+T_path = np.concatenate([[st[1].T], T23, [st[4].T], T41]) - 273.15
 
 fig, ax = plt.subplots(figsize=(7, 5))
 ax.plot(np.array(s_liq) / 1e3, Ts - 273.15, color="#264653", lw=1.5)
 ax.plot(np.array(s_vap) / 1e3, Ts - 273.15, color="#264653", lw=1.5,
         label="saturation dome")
-ax.plot(np.array(s_pts) / 1e3, np.array(T_pts) - 273.15, "o-",
-        color="#e76f51", lw=2, label="ORC cycle")
-for i in [1, 2, 3, 4]:
+ax.plot(s_path, T_path, color="#e76f51", lw=2, label="ORC cycle")
+sm = np.array([st[i].s for i in (1, 2, 3, 4)]) / 1e3
+Tm = np.array([st[i].T for i in (1, 2, 3, 4)]) - 273.15
+ax.plot(sm, Tm, "o", color="#e76f51", ms=6)
+for i in (1, 2, 3, 4):
     ax.annotate(str(i), (st[i].s / 1e3, st[i].T - 273.15),
-                textcoords="offset points", xytext=(7, 5), fontweight="bold")
+                textcoords="offset points", xytext=(8, 6), fontweight="bold")
 ax.set_xlabel("specific entropy  [kJ/kg·K]")
 ax.set_ylabel("temperature  [°C]")
 ax.set_title(f"{fluid} ORC — T–s diagram (120 °C / 30 °C)")
