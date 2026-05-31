@@ -21,6 +21,10 @@ def code(src):
 # ----------------------------------------------------------------------------- #
 md(r"""# Geothermal Binary ORC Simulator — Demonstration
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/khb-git/geothermal-orc/blob/main/notebooks/demo.ipynb)
+&nbsp;
+[![View on nbviewer](https://raw.githubusercontent.com/jupyter/design/master/logos/Badges/nbviewer_badge.svg)](https://nbviewer.org/github/khb-git/geothermal-orc/blob/main/notebooks/demo.ipynb)
+
 **`geothermal-orc`** is a single, deep implementation of a subcritical binary
 (Organic Rankine Cycle) geothermal power plant, built for literature-grade
 rigor. This notebook walks the full modelling chain:
@@ -41,6 +45,17 @@ Throughout, computed numbers are cross-checked against published values, and
 the notebook is explicit about which checks are hard validations versus
 order-of-magnitude plausibility checks.
 """)
+
+code(r"""# Setup. On Colab / Binder this installs the package; locally it is a no-op.
+try:
+    import geothermal_orc  # noqa: F401
+except ImportError:
+    import subprocess, sys
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-q",
+         "git+https://github.com/khb-git/geothermal-orc.git"],
+        check=True,
+    )""")
 
 code(r"""import numpy as np
 import matplotlib.pyplot as plt
@@ -373,6 +388,60 @@ plt.tight_layout(); plt.show()
 print("year :  T[C]  ->  P[MW]")
 for y, p in zip(sample_years, P_years):
     print(f"{y:4d} : {binary.temperature_at(y):6.1f}  -> {p:6.3f}")""")
+
+# ----------------------------------------------------------------------------- #
+md(r"""## 9. Interactive design explorer
+
+The cell below defines `plot_design`, which — for a chosen working fluid, brine
+inlet temperature, condensing temperature, and pinch — runs a quick internal
+search over evaporation temperature, then reports net power, utilization
+efficiency, brine outlet temperature, and the evaporator *T*–*Q* diagram. The
+static figure here is the default configuration (isobutane, 150 °C brine).
+
+**To move the controls live**, open this notebook in Colab (badge at the top)
+and run all cells; the cell after this one turns these four inputs into
+sliders. GitHub shows a static frame because its viewer cannot run a kernel.""")
+
+code(r"""def plot_design(fluid="Isobutane", T_brine=150.0, T_cond=30.0, pinch=5.0):
+    # Quick near-optimal design for a 100 kg/s brine, with a T-Q plot.
+    Tc_C = PropsSI("Tcrit", fluid) - 273.15
+    lo, hi = T_cond + 5.0, min(Tc_C - 2.0, T_brine - pinch - 1.0)
+    best, bestTe = None, None
+    if hi > lo:
+        for Te in np.linspace(lo, hi, 8):
+            try:
+                r = ORCCycle(fluid, T_evap_C=float(Te), T_cond_C=T_cond
+                             ).solve_with_resource(
+                                 m_brine=100.0, T_brine_in_C=T_brine,
+                                 pinch_evap=pinch, n=40, n_search=24)
+            except Exception:
+                continue
+            if best is None or r.W_net > best.W_net:
+                best, bestTe = r, float(Te)
+
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    if best is None:
+        ax.text(0.5, 0.5, "infeasible configuration", ha="center", va="center")
+        ax.axis("off"); plt.show()
+        print("No feasible design for these settings.")
+        return
+    ev = best.evaporator
+    ax.plot(ev.duty / 1e6, ev.T_hot - 273.15, color="#e76f51", lw=2,
+            label="brine (hot)")
+    ax.plot(ev.duty / 1e6, ev.T_cold - 273.15, color="#2a9d8f", lw=2,
+            label=f"{fluid} (cold)")
+    ax.set_xlabel("cumulative duty  [MW]"); ax.set_ylabel("temperature  [°C]")
+    ax.set_title(f"{fluid}: T_evap ≈ {bestTe:.0f} °C  →  "
+                 f"net power {best.W_net/1e6:.2f} MW")
+    ax.legend(); plt.tight_layout(); plt.show()
+    print(f"net power         = {best.W_net/1e6:6.2f} MW")
+    print(f"utilization eff.  = {best.eta_utilization*100:6.2f} %")
+    print(f"brine outlet      = {best.brine_T_out-273.15:6.1f} °C")
+    print(f"working-fluid flow= {best.m_wf:6.1f} kg/s   (T_evap ≈ {bestTe:.0f} °C)")
+
+
+# Static default configuration (this frame is what GitHub shows).
+plot_design()""")
 
 # ----------------------------------------------------------------------------- #
 md(r"""## Summary

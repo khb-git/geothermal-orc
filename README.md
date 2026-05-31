@@ -1,5 +1,8 @@
 # geothermal-orc
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/khb-git/geothermal-orc/blob/main/notebooks/demo.ipynb)
+[![View on nbviewer](https://raw.githubusercontent.com/jupyter/design/master/logos/Badges/nbviewer_badge.svg)](https://nbviewer.org/github/khb-git/geothermal-orc/blob/main/notebooks/demo.ipynb)
+
 A single, deep, literature-grade model of a **subcritical binary (Organic
 Rankine Cycle) geothermal power plant** — from working-fluid selection through
 cycle thermodynamics, evaporator pinch analysis, resource-coupled energy and
@@ -67,9 +70,14 @@ print(f"optimum: {opt.T_evap_opt_C:.1f} C -> {opt.W_net_opt/1e6:.2f} MW")
 ```
 
 The full walkthrough — with *T*–*s* and *T*–*Q* diagrams, an exergy-destruction
-breakdown, fluid screening, silica solubility curves, and a 30-year decline
-projection — is in [`notebooks/demo.ipynb`](notebooks/demo.ipynb) (executed, with
-plots embedded).
+breakdown, fluid screening, silica solubility curves, a 30-year decline
+projection, and an interactive design explorer — is in
+[`notebooks/demo.ipynb`](notebooks/demo.ipynb) (executed, with plots embedded).
+
+**Viewing it:** GitHub renders the notebook with all plots inline; if its viewer
+ever hiccups (the occasional "An error occurred" page), the **nbviewer** badge
+above always renders it. To move the explorer's sliders, click **Open in Colab**
+and run all cells — Colab installs the package and gives you a live kernel.
 
 ---
 
