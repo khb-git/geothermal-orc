@@ -401,8 +401,87 @@ is internally honest — and the exergy ledger points at the evaporator and turb
 as the losses worth attacking.""")
 
 # ============================================================================ #
-# ACT 6
-md(r"""## Act 6 · Tuning the design, and reconsidering the fluid
+# ACT 6 (balance of plant)
+md(r"""## Act 6 · From cycle to grid — parasitics and the heat sink
+
+The megawatts in Act 5 are what the *turbine* makes. The grid sees less, for two
+reasons a cycle diagram never shows.
+
+First, the plant spends power on itself. It must **reject** the condenser heat —
+in an air-cooled binary unit that means banks of fans — and it must **move the
+brine**, pumping it up the production well and back down the injection well.
+These *parasitic loads* are a tax on gross output; air-cooled binary plants
+typically deliver 75–90% of gross to the grid.
+
+Second, the plant cannot choose its condensing temperature. That is set by the
+**ambient air** the condenser rejects heat into, plus a fixed approach. So output
+is not a single number — it **breathes with the weather**, strongest on a cold
+night and weakest on a hot afternoon.""")
+
+code(r"""from geothermal_orc import evaluate_plant, seasonal_performance
+
+resource = GeothermalResource(T_reservoir_C=150.0, mass_flow=100.0)
+# Design-ambient operating point (10 C -> ~30 C condensing, matching earlier acts).
+pr = evaluate_plant("Isobutane", resource, ambient_C=10.0)
+
+print(f"gross (turbine)       = {pr.W_gross/1e6:6.3f} MW")
+print(f"  - working-fluid pump = {pr.W_pump_wf/1e6:6.3f} MW")
+print(f"  - air-cooler fans    = {pr.P_fan/1e6:6.3f} MW")
+print(f"  - brine pumping      = {pr.P_brine_pump/1e6:6.3f} MW")
+print(f"  = net to grid        = {pr.W_net_plant/1e6:6.3f} MW   "
+      f"({pr.net_gross_ratio*100:.0f}% of gross)")
+
+# Waterfall from gross to net.
+steps = [("gross", pr.W_gross, "#2a7d6f"),
+         ("WF pump", -pr.W_pump_wf, "#bbbbbb"),
+         ("air-cooler fans", -pr.P_fan, "#e76f51"),
+         ("brine pumps", -pr.P_brine_pump, "#e9b44c")]
+fig, ax = plt.subplots(figsize=(7.6, 4.2))
+running = 0.0
+for i, (lab, val, col) in enumerate(steps):
+    bottom = running if val >= 0 else running + val
+    ax.bar(i, abs(val) / 1e6, bottom=bottom / 1e6, color=col)
+    running += val
+ax.bar(len(steps), running / 1e6, color="#457b9d")
+ax.set_xticks(range(len(steps) + 1))
+ax.set_xticklabels([s[0] for s in steps] + ["net to grid"], rotation=20, ha="right")
+ax.set_ylabel("power  [MW]")
+ax.set_title("From turbine gross to net-to-grid (isobutane, 150 °C brine)")
+plt.tight_layout(); plt.show()""")
+
+md(r"""Now let the weather move. Feeding a representative monthly ambient profile
+through the **same plant** (fixed evaporation temperature, condensing tracking
+ambient) gives the seasonal output and the annual energy a developer sells.""")
+
+code(r"""months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+          "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+ambient_C = [2, 4, 8, 13, 18, 23, 26, 25, 20, 13, 6, 2]   # representative high-desert site
+
+season = seasonal_performance("Isobutane", resource, ambient_C,
+                              fixed_T_evap_C=pr.T_evap_C)
+net_MW = season.W_net_plant / 1e6
+
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.bar(months, net_MW, color="#457b9d")
+ax.axhline(net_MW.mean(), color="#e76f51", ls="--",
+           label=f"annual mean {net_MW.mean():.2f} MW")
+ax.set_ylabel("net power to grid  [MW]")
+ax.set_title("Seasonal output — same plant, condensing follows ambient")
+ax.legend(); plt.tight_layout(); plt.show()
+
+print(f"winter-to-summer swing : {net_MW.max():.2f} -> {net_MW.min():.2f} MW "
+      f"({(1 - net_MW.min()/net_MW.max())*100:.0f}% drop)")
+print(f"annual energy          : {season.annual_energy_MWh/1e3:.2f} GWh")
+print(f"capacity factor (vs best month) : {season.capacity_factor*100:.0f} %")""")
+
+takeaway(r"""Gross is not grid: parasitic fans and pumps take roughly a fifth off
+the top, and because the condenser breathes ambient air the same hardware swings
+substantially between winter and summer — the seasonality a fixed condensing
+temperature hides.""")
+
+# ============================================================================ #
+# ACT 7
+md(r"""## Act 7 · Tuning the design, and reconsidering the fluid
 
 The 120 °C design point was a guess. Net power is **non-monotonic** in
 evaporation temperature: raising it lifts cycle efficiency but tightens the
@@ -463,8 +542,8 @@ of kilowatts — extra power from better design rather than a bigger resource. T
 ranking is by raw power; safety and cost still get a vote.""")
 
 # ============================================================================ #
-# ACT 7
-md(r"""## Act 7 · The limits reality imposes — silica and decline
+# ACT 8
+md(r"""## Act 8 · The limits reality imposes — silica and decline
 
 Two constraints turn this point design into something that survives in the field.
 
@@ -518,11 +597,17 @@ print(f"amorphous-saturation (SI=1) reinjection floor = {T_floor:.1f} °C")""")
 md(r"""**And the resource does not last forever.** As heat is mined the
 production temperature drifts down. Snyder et al. (2017), analysing operating US
 plants, found most wells decline roughly **linearly**, near **0.5 %/yr for
-binary** and **0.8 %/yr for flash**. Propagating our 150 °C binary resource over
-thirty years — and re-optimizing the plant as it cools — shows how the power
-fades.""")
+binary** and **0.8 %/yr for flash**.
 
-code(r"""years = np.arange(0, 31)
+How the *power* fades depends on what you assume about the plant. The optimistic
+view **re-optimizes** a fresh plant at each year's temperature. The realistic
+view runs the **installed year-0 hardware off-design** — a fixed turbine
+(modelled with a Stodola swallowing law) and a fixed evaporator conductance,
+with the turbine losing efficiency at part load. We show both, net-to-grid.""")
+
+code(r"""from geothermal_orc import decline_curves
+
+years = np.arange(0, 31)
 binary = GeothermalResource(T_reservoir_C=150.0, mass_flow=100.0,
                             decline_rate=0.005, decline_mode="linear")
 flash = GeothermalResource(T_reservoir_C=150.0, mass_flow=100.0,
@@ -530,14 +615,11 @@ flash = GeothermalResource(T_reservoir_C=150.0, mass_flow=100.0,
 T_bin = [binary.temperature_at(y) for y in years]
 T_fl = [flash.temperature_at(y) for y in years]
 
-# Plant power at years 0, 10, 20, 30 (re-optimized as the resource cools).
+# Net-to-grid over field life: re-optimized envelope vs fixed installed plant.
 sample_years = [0, 10, 20, 30]
-P_years = []
-for y in sample_years:
-    res_y = GeothermalResource(T_reservoir_C=binary.temperature_at(y),
-                               mass_flow=100.0)
-    o = optimize_evaporation_temperature("Isobutane", res_y, T_cond_C=30.0)
-    P_years.append(o.W_net_opt / 1e6)
+_design, T_samp, W_reopt, W_fixed = decline_curves(
+    "Isobutane", resource, sample_years, ambient_C=10.0, decline_rate=0.005)
+P_years = W_reopt / 1e6          # re-optimized net-to-grid, used in the verdict
 
 fig, (a1, a2) = plt.subplots(1, 2, figsize=(12, 4.3))
 a1.plot(years, T_bin, color="#2a9d8f", lw=2, label="binary 0.5 %/yr")
@@ -545,85 +627,85 @@ a1.plot(years, T_fl, color="#e76f51", lw=2, label="flash 0.8 %/yr")
 a1.set_xlabel("year"); a1.set_ylabel("production temperature  [°C]")
 a1.set_title("Resource thermal decline (Snyder et al., 2017)"); a1.legend()
 
-a2.plot(sample_years, P_years, "o-", color="#457b9d", lw=2)
-a2.set_xlabel("year"); a2.set_ylabel("optimized net power  [MW]")
-a2.set_title("Binary plant power as the resource cools")
-for x, p in zip(sample_years, P_years):
-    a2.text(x, p, f"{p:.2f}", ha="center", va="bottom")
+a2.plot(sample_years, W_reopt / 1e6, "o-", color="#457b9d", lw=2,
+        label="re-optimized each year")
+a2.plot(sample_years, W_fixed / 1e6, "s--", color="#8b3a1f", lw=2,
+        label="fixed plant, off-design")
+a2.set_xlabel("year"); a2.set_ylabel("net power to grid  [MW]")
+a2.set_title("Binary plant power as the resource cools"); a2.legend()
 plt.tight_layout(); plt.show()
 
-print("year :  T[C]  ->  P[MW]")
-for y, p in zip(sample_years, P_years):
-    print(f"{y:4d} : {binary.temperature_at(y):6.1f}  -> {p:6.3f}")""")
+print("year :  T[C]  ->  re-opt[MW]  fixed[MW]")
+for y, t, a, b in zip(sample_years, T_samp, W_reopt, W_fixed):
+    print(f"{y:4d} : {t:6.1f}  -> {a/1e6:8.2f}  {b/1e6:8.2f}")""")
 
 takeaway(r"""Silica sets *how cold* you may run the brine; decline sets *how
 long* the power lasts. Both bound the design as firmly as the thermodynamics
 do.""")
 
 # ============================================================================ #
-# ACT 8
-md(r"""## Act 8 · The verdict for our 150 °C well
+# ACT 9
+md(r"""## Act 9 · The verdict for our 150 °C well
 
 Pulling the threads together for the well we started with — 100 kg/s of 150 °C
-brine, condensing at 30 °C, 5 K pinch. The card below states the recommended
-design, the power it makes, how much of the brine's available work that
-represents, where the brine leaves, and how the output holds up over the field's
-life.""")
+brine, air-cooled at a 10 °C design ambient (~30 °C condensing), 5 K pinch. The
+card states the headline **net-to-grid** design, what it costs in parasitics,
+how much of the brine's available work it captures, where the brine leaves, and
+how the output holds up over the field's life.""")
 
-code(r"""# Re-solve isobutane at its own optimum for a self-consistent verdict.
-best_design = ORCCycle("Isobutane", T_evap_C=opt.T_evap_opt_C, T_cond_C=30.0
-                       ).solve_with_resource(m_brine=100.0, T_brine_in_C=150.0,
-                                             pinch_evap=5.0)
-win = ranked[0]
+code(r"""win = ranked[0]
 drop = (P_years[-1] / P_years[0] - 1) * 100.0
 
 fig, (axL, axR) = plt.subplots(1, 2, figsize=(11, 4.0),
-                               gridspec_kw={"width_ratios": [1.2, 1]})
+                               gridspec_kw={"width_ratios": [1.25, 1]})
 axL.axis("off"); axL.set_xlim(0, 1); axL.set_ylim(0, 1)
 axL.text(0, 1.02, "Design verdict", fontsize=15, fontweight="bold",
          color="#8b3a1f", va="top")
 rowiter = [
     ("Resource", "150 °C brine, 100 kg/s"),
-    ("Best fluid (raw power)",
-     f"{win.fluid} — {win.W_net_opt/1e6:.2f} MW @ {win.T_evap_opt_C:.0f} °C"),
-    ("Isobutane optimum",
-     f"{opt.W_net_opt/1e6:.2f} MW @ {opt.T_evap_opt_C:.0f} °C"),
+    ("Working fluid", f"isobutane @ {pr.T_evap_C:.0f} °C evaporation"),
+    ("Gross (turbine)", f"{pr.W_gross/1e6:.2f} MW"),
+    ("Parasitics (fans + pumps)",
+     f"{(pr.W_gross - pr.W_net_plant)/1e6:.2f} MW"),
+    ("Net to grid",
+     f"{pr.W_net_plant/1e6:.2f} MW  ({pr.net_gross_ratio*100:.0f}% of gross)"),
     ("Utilization efficiency",
-     f"{best_design.eta_utilization*100:.0f}% of brine exergy"),
-    ("Working-fluid flow", f"{best_design.m_wf:.0f} kg/s"),
-    ("Brine reinjected at", f"{best_design.brine_T_out-273.15:.0f} °C"),
-    ("Power at year 30", f"{P_years[-1]:.2f} MW ({drop:+.0f}% vs year 0)"),
+     f"{pr.cycle.eta_utilization*100:.0f}% of brine exergy"),
+    ("Brine reinjected at", f"{pr.cycle.brine_T_out-273.15:.0f} °C"),
+    ("Net at year 30", f"{P_years[-1]:.2f} MW ({drop:+.0f}% vs year 0)"),
 ]
-y = 0.88
+y = 0.90
 for k, v in rowiter:
     axL.text(0.0, y, k, fontsize=10.5, color="#6b7280", va="top")
     axL.text(0.46, y, v, fontsize=11, color="#1a1f2b", va="top",
              fontweight="medium")
-    y -= 0.145
+    y -= 0.125
 
 axR.plot(sample_years, P_years, "o-", color="#457b9d", lw=2.2)
 axR.fill_between(sample_years, P_years, color="#457b9d", alpha=0.08)
 for x, p in zip(sample_years, P_years):
     axR.text(x, p + max(P_years) * 0.02, f"{p:.2f}", ha="center", fontsize=9,
              color="#1a1f2b")
-axR.set_xlabel("year"); axR.set_ylabel("net power  [MW]")
-axR.set_title("30-year outlook (binary decline)", fontsize=11)
+axR.set_xlabel("year"); axR.set_ylabel("net to grid  [MW]")
+axR.set_title("30-year outlook (re-optimized)", fontsize=11)
 axR.set_ylim(0, max(P_years) * 1.2)
 plt.tight_layout(); plt.show()""")
 
-md(r"""So the honest answer to the opening question: a binary plant on this well
-makes roughly **4 MW**, captures nearly **half** of the brine's available work
-(≈ 48 %), and reinjects comfortably above the silica-scaling floor. Over thirty
-years its output falls by about **40 %** — and note the leverage: a ~15 %
-decline in resource temperature drives a far steeper drop in power, because the
-brine's available work scales faster than its temperature. **Propane** edges
-isobutane on raw power (its lower critical temperature lets the brine boil more
-fluid), but its A3 flammability is a real plant-safety cost — exactly the kind of
-trade a screen surfaces and an engineer, not an optimizer, decides.""")
+md(r"""So the honest answer to the opening question: this well drives a turbine
+making roughly **4.5 MW gross**, but after the air-cooler fans and brine pumps,
+about **3.5 MW reaches the grid** — near **77% of gross** — capturing close to
+half of the brine's available work. It reinjects comfortably above the silica
+floor, and over thirty years the net output falls by more than **40%** as the
+reservoir cools (note the leverage: a ~15% drop in resource temperature drives a
+far steeper drop in power, because available work scales faster than
+temperature). **Propane** edges isobutane on raw cycle power — its lower critical
+temperature lets the brine boil more fluid — but its A3 flammability is a real
+plant-safety cost, exactly the kind of trade a screen surfaces and an engineer,
+not an optimizer, decides.""")
 
 # ============================================================================ #
-# ACT 9
-md(r"""## Act 9 · Your turn — change the resource
+# ACT 10
+md(r"""## Act 10 · Your turn — change the resource
 
 The function below is the whole pipeline in miniature: give it a fluid, brine
 temperature, condensing temperature, and pinch, and it finds a near-optimal
@@ -687,6 +769,11 @@ about what is *validated* versus what is *plausible*:
 * Energy and exergy balances on every resource-coupled solve close to machine
   precision.
 * Wet / dry / isentropic fluid classes agree with the literature consensus.
+* **Benchmarked against the ORC literature** (see `tests/test_benchmarks.py`):
+  subcritical thermal efficiency at 100 °C/30 °C lands at ~11–12% (vs the ~10%
+  consensus of Saleh et al. 2007 and Su et al. 2018), ideal-cycle efficiency
+  ~15%, and the 150 °C fluid screen tops out on isobutane/propane — matching
+  Augustine et al. (NREL), who found isobutane optimal for 140–170 °C binary.
 
 **Plausibility checks** (right physics, right range — not matched to a named
 plant):

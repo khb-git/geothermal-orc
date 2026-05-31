@@ -6,9 +6,11 @@
 A single, deep, literature-grade model of a **subcritical binary (Organic
 Rankine Cycle) geothermal power plant** — from working-fluid selection through
 cycle thermodynamics, evaporator pinch analysis, resource-coupled energy and
-exergy balances, evaporation-temperature optimization, and the two real-world
-constraints that bound binary plant design: **silica scaling** and **reservoir
-thermal decline**.
+exergy balances, evaporation-temperature optimization, the **balance-of-plant**
+that turns gross power into net-to-grid (parasitic fans and pumps, ambient-set
+condensing, seasonal output), **off-design operation** as the resource cools,
+and the two real-world constraints that bound binary plant design: **silica
+scaling** and **reservoir thermal decline**.
 
 Built on [CoolProp](http://www.coolprop.org/) for equation-of-state property
 data, with [SciPy](https://scipy.org/) for the root-finding and optimization.
@@ -24,6 +26,10 @@ geothermal binary design is dominated by things a per-kg cycle never sees:
   point rather than at either terminal, so a log-mean-ΔT check is not enough;
 - the **resource coupling** that ties working-fluid flow to the brine stream and
   decides how much power the field can actually support;
+- the **parasitic loads and ambient heat sink** that separate turbine *gross*
+  power from *net-to-grid*, and make output breathe with the seasons;
+- the **off-design** behaviour of fixed installed hardware as the resource cools,
+  which differs from re-optimizing a fresh plant each year;
 - the **silica chemistry** that sets a floor on how cold the brine may be
   reinjected;
 - the **thermal decline** that erodes output over field life.
@@ -69,9 +75,22 @@ opt = optimize_evaporation_temperature("Isobutane", resource, T_cond_C=30.0)
 print(f"optimum: {opt.T_evap_opt_C:.1f} C -> {opt.W_net_opt/1e6:.2f} MW")
 ```
 
-The full walkthrough — with *T*–*s* and *T*–*Q* diagrams, an exergy-destruction
-breakdown, fluid screening, silica solubility curves, a 30-year decline
-projection, and an interactive design explorer — is in
+For deliverable power, the `plant` layer adds parasitics and an ambient-set heat
+sink:
+
+```python
+from geothermal_orc import evaluate_plant
+
+pr = evaluate_plant("Isobutane", resource, ambient_C=10.0)   # ~30 C condensing
+print(f"gross {pr.W_gross/1e6:.2f} MW -> net-to-grid {pr.W_net_plant/1e6:.2f} MW "
+      f"({pr.net_gross_ratio*100:.0f}% of gross)")
+```
+
+The full walkthrough — a ten-act story from "what is a binary plant" to a design
+verdict, with the plant schematic, *T*–*s* and *T*–*Q* diagrams, an
+exergy-destruction breakdown, the gross-to-net waterfall and seasonal output,
+fluid screening, silica curves, a re-optimized-vs-fixed-hardware decline, and an
+interactive design explorer — is in
 [`notebooks/demo.ipynb`](notebooks/demo.ipynb) (executed, with plots embedded).
 
 **Viewing it:** GitHub renders the notebook with all plots inline; if its viewer
@@ -91,6 +110,7 @@ and run all cells — Colab installs the package and gives you a live kernel.
 | `cycle` | `ORCCycle`: the four-point cycle (`solve`) and the resource-coupled plant with full energy/exergy balances (`solve_with_resource`). |
 | `geothermal` | Fournier–Rowe silica solubility (amorphous & quartz), the quartz geothermometer, the reinjection-temperature floor, and a `GeothermalResource` with a thermal-decline model. |
 | `optimization` | `optimize_evaporation_temperature` (net-power maximization under subcritical/pinch/silica constraints) and `screen_fluids` (multi-fluid ranking). |
+| `plant` | Balance of plant: parasitic loads (air-cooled-condenser fans, brine pumping), ambient-set condensing, `evaluate_plant` (gross → net-to-grid), `seasonal_performance`, and off-design operation (`design_plant`, `off_design_operation`, `decline_curves`) via a Stodola swallowing law, fixed UA, and a part-load turbine model. |
 
 State-point numbering follows DiPippo (2016): **1** condenser outlet / pump
 inlet, **2** pump outlet, **3** evaporator outlet / turbine inlet, **4** turbine
@@ -104,10 +124,12 @@ outlet / condenser inlet.
 pytest -q
 ```
 
-The suite is **90 tests** and targets correctness rather than coverage theatre:
+The suite is **117 tests** and targets correctness rather than coverage theatre:
 energy- and exergy-balance closure on resource-coupled solves, pinch behaviour
 across phase change, silica-correlation values against the literature, the
-classifier's wet/dry/isentropic verdicts, and optimizer feasibility/ranking.
+classifier's wet/dry/isentropic verdicts, optimizer feasibility/ranking,
+parasitic and off-design plant behaviour, and a `test_benchmarks.py` suite that
+pins headline numbers to published values.
 
 > Performance note: `solve_with_resource` precomputes the (flow-independent)
 > working-fluid side of the evaporator profile once and runs the pinch root-find
@@ -132,15 +154,52 @@ This package is honest about what is *validated* versus what is merely
 - Wet/dry/isentropic fluid classes agree with the standard literature consensus
   (e.g. water/ammonia/R134a wet; isobutane/pentanes/R245fa dry;
   R1234yf/R1234ze(E) near-isentropic).
+- **Benchmarked against the ORC literature** (`tests/test_benchmarks.py`):
+  subcritical thermal efficiency at 100 °C/30 °C lands at ~11–12% (the ~10%
+  consensus of Saleh et al. 2007 and Su et al. 2018), ideal-cycle efficiency
+  ~15%, and the 150 °C fluid screen tops out on isobutane/propane — matching
+  Augustine et al. (NREL), who found isobutane optimal for 140–170 °C binary.
 
 **Plausibility checks** (right physics, right ballpark — *not* matched to a
 named plant):
 
-- Absolute plant net power, utilization (second-law) efficiency, and brine
+- Absolute net-to-grid power, utilization (second-law) efficiency, and brine
   outlet temperature fall within ranges DiPippo reports for comparable ~150 °C
   binary resources, but are not calibrated to a specific operating unit.
+- Parasitic-load defaults (fan air-side ΔT and Δp, brine-loop pressure) are
+  documented, site-independent starting points; a real project substitutes
+  measured values.
+- The off-design model uses a reduced Stodola + fixed-UA + part-load-turbine
+  representation; the part-load curve is illustrative, not a specific machine map.
 - Decline rates use the Snyder et al. (2017) averages (~0.5 %/yr binary,
   ~0.8 %/yr flash, predominantly linear); an individual field can differ.
+
+---
+
+## Scope and limitations
+
+The model is a **pure-fluid, subcritical, non-recuperated** binary cycle with a
+**reduced** balance-of-plant. Deliberate simplifications, and the planned
+extensions that address them:
+
+- **No recuperator/IHX, no superheat control** beyond saturated-vapour turbine
+  inlet. (For dry fluids, recuperation can *lower* net power on a free heat
+  source — a geothermal-specific nuance worth modelling.)
+- **Pure fluids only.** Zeotropic mixtures glide in temperature and better match
+  the brine and condenser curves — the standard route to higher utilization.
+- **Subcritical only.** Transcritical/supercritical cycles can match the resource
+  better at the cost of higher pressures.
+- **Isobaric heat exchange.** Real evaporator/condenser/piping pressure drops are
+  neglected; the pinch is an input rather than an area/cost trade-off.
+- **No techno-economics.** Power is the objective; LCOE and a cost-optimal (vs
+  power-optimal) design are not yet modelled.
+- **Brine as pure water**; calcite/CO₂/H₂S chemistry beyond silica is not modelled
+  (binary's pressurized, no-flash operation does suppress calcite).
+- **Empirical decline**; reservoir-scale thermal breakthrough is out of scope.
+
+These are tracked as a tiered roadmap (parasitics and ambient/off-design are
+done; mixtures, recuperation, pressure drops, and a techno-economic/LCOE layer
+are next).
 
 ---
 
@@ -155,6 +214,12 @@ named plant):
   1052–1056.
 - D. M. Snyder, K. F. Beckers, K. R. Young, "Update on geothermal direct-use and
   power-plant thermal decline," *GRC Transactions* 41 (2017).
+- C. Augustine et al., "A comparison of geothermal binary cycle working fluids"
+  (NREL), *GRC Transactions* — isobutane optimal for 140–170 °C subcritical
+  binary resources.
+- W. Su et al., "A limiting efficiency of subcritical Organic Rankine cycle under
+  the constraint of working fluids," *Energy* (2018) — subcritical ORC thermal
+  efficiency ~10%, below 50% of Carnot perfectness.
 
 ---
 

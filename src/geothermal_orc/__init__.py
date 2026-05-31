@@ -38,6 +38,21 @@ from .geothermal import (
     GeothermalResource,
 )
 from .optimization import optimize_evaporation_temperature, screen_fluids
+from .plant import (
+    PlantResult,
+    SeasonalResult,
+    evaluate_plant,
+    seasonal_performance,
+    air_cooled_fan_power,
+    brine_pump_power,
+    condensing_temperature,
+    DesignPoint,
+    design_plant,
+    off_design_operation,
+    decline_curves,
+    profile_UA,
+    part_load_turbine_efficiency,
+)
 
 __version__ = "0.1.0"
 
@@ -64,5 +79,18 @@ __all__ = [
     "GeothermalResource",
     "optimize_evaporation_temperature",
     "screen_fluids",
+    "PlantResult",
+    "SeasonalResult",
+    "evaluate_plant",
+    "seasonal_performance",
+    "air_cooled_fan_power",
+    "brine_pump_power",
+    "condensing_temperature",
+    "DesignPoint",
+    "design_plant",
+    "off_design_operation",
+    "decline_curves",
+    "profile_UA",
+    "part_load_turbine_efficiency",
     "__version__",
 ]
