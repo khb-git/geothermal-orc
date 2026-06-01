@@ -704,8 +704,156 @@ plant-safety cost, exactly the kind of trade a screen surfaces and an engineer,
 not an optimizer, decides.""")
 
 # ============================================================================ #
-# ACT 10
-md(r"""## Act 10 · Your turn — change the resource
+# ACT 10 (Tier 2: cycle refinements)
+md(r"""## Act 10 · A smarter cycle? Recuperation, pressure drops, and the cost of area
+
+The verdict above used an idealized subcritical cycle. Before trusting it, an
+engineer asks three questions a teaching model usually skips.
+
+**Can we recover the turbine's leftover heat?** A dry fluid leaves the turbine
+still superheated; a *recuperator* uses that to preheat the pump outlet. It
+reliably lifts cycle efficiency — but watch what it does on a *free* heat
+source.""")
+
+code(r"""# Recuperator effectiveness sweep (dry fluid: n-pentane).
+eps_grid = [0.0, 0.3, 0.6, 0.85]
+eta_th, brine_out, wnet = [], [], []
+for e in eps_grid:
+    c = ORCCycle("n-Pentane", T_evap_C=120.0, T_cond_C=30.0,
+                 recuperator_effectiveness=e)
+    eta_th.append(c.solve().eta_th * 100)
+    res = c.solve_with_resource(m_brine=100.0, T_brine_in_C=150.0, pinch_evap=5.0)
+    brine_out.append(res.brine_T_out - 273.15)
+    wnet.append(res.W_net / 1e6)
+
+fig, ax1 = plt.subplots(figsize=(7.6, 4.2))
+ax1.plot(eps_grid, eta_th, "o-", color="#2a7d6f")
+ax1.set_xlabel("recuperator effectiveness")
+ax1.set_ylabel("cycle efficiency  [%]", color="#2a7d6f")
+ax2 = ax1.twinx()
+ax2.plot(eps_grid, brine_out, "s--", color="#8b3a1f")
+ax2.set_ylabel("brine reinjection T  [°C]", color="#8b3a1f")
+ax1.set_title("Recuperator: efficiency rises (teal), but the brine leaves hotter (red)")
+plt.tight_layout(); plt.show()
+
+for e, et, b, w in zip(eps_grid, eta_th, brine_out, wnet):
+    print(f"eps={e:.2f}:  eta_th={et:5.2f}%   net={w:.3f} MW   brine_out={b:.1f} C")""")
+
+md(r"""Cycle efficiency climbs, yet net power barely moves and the brine is
+**reinjected hotter** — the recuperator just shifts preheating from the brine to
+the exhaust. On a free resource that is worse utilization for no power gain. (In
+a waste-heat plant, where the source is finite or paid-for, the same device pays
+handsomely — context decides.)
+
+**Two more realities:** heat exchangers are not isobaric, and the 5 K pinch was
+never free.""")
+
+code(r"""from geothermal_orc import pinch_area_tradeoff
+
+# Pressure drops cost net power (pump lifts higher, turbine exhausts higher).
+base = ORCCycle("Isobutane", T_evap_C=120.0, T_cond_C=30.0).solve()
+drop = ORCCycle("Isobutane", T_evap_C=120.0, T_cond_C=30.0,
+                dp_evap_frac=0.05, dp_cond_frac=0.10).solve()
+print(f"isobutane net work:  {base.w_net/1e3:.1f} kJ/kg (isobaric)  ->  "
+      f"{drop.w_net/1e3:.1f} kJ/kg with 5%/10% drops "
+      f"({(drop.w_net/base.w_net-1)*100:.0f}%)")
+
+# The pinch is really a capital decision: tighter -> more power, but more area.
+pinches = [2, 4, 6, 8, 10, 12]
+pin, W, UA = pinch_area_tradeoff("Isobutane", resource, T_evap_C=120.0,
+                                 pinches_C=pinches)
+fig, ax = plt.subplots(figsize=(7.6, 4.2))
+ax.plot(UA / 1e6, W / 1e6, "o-", color="#457b9d")
+for p, u, w in zip(pin, UA, W):
+    ax.annotate(f"{p:.0f} K", (u / 1e6, w / 1e6),
+                textcoords="offset points", xytext=(6, -10), fontsize=8)
+ax.set_xlabel("evaporator conductance UA  [MW/K]")
+ax.set_ylabel("net power  [MW]")
+ax.set_title("The pinch is a capital decision: power vs heat-exchanger area")
+plt.tight_layout(); plt.show()""")
+
+takeaway(r"""A recuperator buys cycle efficiency but, on a free source, mostly
+reinjects the brine hotter for no extra power. Real pressure drops shave a few
+percent off net work. And the pinch is not a free input — it is an area-versus-
+power trade with sharply diminishing returns past a few kelvin.""")
+
+# ============================================================================ #
+# ACT 11 (Tier 2: advanced fluids and cycles)
+md(r"""## Act 11 · A different fluid, a different cycle — mixtures and transcritical
+
+Two final levers change the *shape* of the heat-transfer match, not just its
+numbers.
+
+**Zeotropic mixtures** boil and condense over a temperature *glide* instead of a
+flat plateau, so they can track the brine's straight-line cooling. The pay-off
+is strongest for low-enthalpy resources where no single pure fluid fits well —
+so here we drop to a **120 °C** well.""")
+
+code(r"""from geothermal_orc import (MixtureCycle, screen_compositions,
+                             optimize_evaporation_temperature)
+
+res120 = GeothermalResource(T_reservoir_C=120.0, mass_flow=100.0)
+fracs = [0.30, 0.45, 0.60, 0.75, 0.90]   # isobutane mole fraction
+screen = screen_compositions("Isobutane", "Isopentane", fracs, res120,
+                             T_evap_dew_C=84.0, T_cond_mean_C=30.0)
+W_mix = [s.W_net / 1e6 if s else float("nan") for s in screen]
+pure_ib = optimize_evaporation_temperature("Isobutane", res120,
+                                           T_cond_C=30.0).W_net_opt / 1e6
+
+fig, ax = plt.subplots(figsize=(7.6, 4.2))
+ax.plot([f * 100 for f in fracs], W_mix, "o-", color="#2a9d8f",
+        label="isobutane/isopentane mixture")
+ax.axhline(pure_ib, color="#8b3a1f", ls="--",
+           label=f"best pure isobutane  {pure_ib:.2f} MW")
+ax.set_xlabel("isobutane mole fraction  [%]")
+ax.set_ylabel("net power  [MW]")
+ax.set_title("Zeotropic glide beats the best pure fluid — 120 °C resource")
+ax.legend(); plt.tight_layout(); plt.show()
+print(f"best mixture {max(w for w in W_mix if w == w):.3f} MW  vs  "
+      f"pure isobutane {pure_ib:.3f} MW")""")
+
+md(r"""At 120 °C a tuned mixture wins by a few percent. (Re-run it at 150 °C and
+the advantage vanishes — there a pure light alkane already fits, which is why
+isobutane won Act 7.)
+
+**Transcritical** cycles go the other way: pump *above* the critical pressure so
+there is no boiling plateau at all, letting the heating curve hug the brine. The
+prize is the hot end of the resource that subcritical propane — capped near its
+96.7 °C critical temperature — simply cannot reach.""")
+
+code(r"""from geothermal_orc import TranscriticalCycle
+
+P_grid = [48e5, 55e5, 65e5, 75e5, 90e5]
+W_tc = []
+for Ph in P_grid:
+    r = TranscriticalCycle("Propane", P_high=Ph, T_turb_in_C=140.0,
+                           T_cond_C=30.0).solve_with_resource(
+        m_brine=100.0, T_brine_in_C=150.0, pinch_heater=5.0)
+    W_tc.append(r.W_net / 1e6)
+sub = optimize_evaporation_temperature("Propane", resource,
+                                       T_cond_C=30.0).W_net_opt / 1e6
+
+fig, ax = plt.subplots(figsize=(7.6, 4.2))
+ax.plot([p / 1e5 for p in P_grid], W_tc, "o-", color="#457b9d",
+        label="transcritical propane")
+ax.axhline(sub, color="#8b3a1f", ls="--",
+           label=f"best subcritical propane  {sub:.2f} MW")
+ax.set_xlabel("turbine-inlet pressure  [bar]")
+ax.set_ylabel("net power  [MW]")
+ax.set_title("Transcritical propane unlocks the hot end — 150 °C resource")
+ax.legend(); plt.tight_layout(); plt.show()
+print(f"best transcritical {max(W_tc):.3f} MW  vs  best subcritical {sub:.3f} MW "
+      f"(+{(max(W_tc)/sub-1)*100:.0f}%)")""")
+
+takeaway(r"""Neither lever is a free win — both add pressure, surface, and
+complexity. But each reshapes the temperature match: a zeotropic glide pays off
+for low-enthalpy resources (~5% at 120 °C), and a transcritical cycle pays off at
+150 °C (~5% with propane) by reaching a turbine inlet no subcritical fluid can.
+Which one wins is set by the resource, not by a rule of thumb.""")
+
+# ============================================================================ #
+# ACT 12
+md(r"""## Act 12 · Your turn — change the resource
 
 The function below is the whole pipeline in miniature: give it a fluid, brine
 temperature, condensing temperature, and pinch, and it finds a near-optimal
@@ -774,6 +922,11 @@ about what is *validated* versus what is *plausible*:
   consensus of Saleh et al. 2007 and Su et al. 2018), ideal-cycle efficiency
   ~15%, and the 150 °C fluid screen tops out on isobutane/propane — matching
   Augustine et al. (NREL), who found isobutane optimal for 140–170 °C binary.
+* **Advanced cycles preserve closure and match the literature direction:** the
+  recuperated, pressure-drop, mixture, and transcritical solves all keep energy/
+  exergy balances closed; zeotropic mixtures help low-enthalpy resources (~5% at
+  120 °C) and transcritical propane helps at 150 °C (~5%), both consistent with
+  the published consensus.
 
 **Plausibility checks** (right physics, right range — not matched to a named
 plant):

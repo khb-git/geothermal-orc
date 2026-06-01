@@ -130,3 +130,102 @@ def test_evaporator_dominates_exergy_destruction():
 def test_W_net_equals_m_wf_times_w_net():
     res = make_resource_result()
     assert res.W_net == pytest.approx(res.m_wf * res.w_net, rel=1e-12)
+
+
+# --- recuperator (Tier 2) --------------------------------------------------- #
+import pytest as _pytest
+from geothermal_orc import GeothermalResource as _Resource
+
+
+def _recup(fluid, eps):
+    return ORCCycle(fluid, T_evap_C=120.0, T_cond_C=30.0,
+                    recuperator_effectiveness=eps)
+
+
+def test_recuperator_effectiveness_validation():
+    with _pytest.raises(ValueError):
+        ORCCycle("n-Pentane", T_evap_C=120.0, T_cond_C=30.0,
+                 recuperator_effectiveness=-0.1)
+    with _pytest.raises(ValueError):
+        ORCCycle("n-Pentane", T_evap_C=120.0, T_cond_C=30.0,
+                 recuperator_effectiveness=1.0)
+
+
+def test_recuperator_absent_when_eps_zero():
+    base = _recup("n-Pentane", 0.0).solve()
+    assert base.recuperator_duty == 0.0
+    assert 5 not in base.states and 6 not in base.states
+
+
+def test_recuperator_raises_cycle_efficiency():
+    etas = [_recup("n-Pentane", e).solve().eta_th for e in (0.0, 0.4, 0.8)]
+    assert etas[0] < etas[1] < etas[2]
+
+
+def test_recuperator_leaves_work_unchanged_but_cuts_heat():
+    base = _recup("n-Pentane", 0.0).solve()
+    rec = _recup("n-Pentane", 0.7).solve()
+    # Turbine and pump work are untouched by an internal exchanger.
+    assert rec.w_net == _pytest.approx(base.w_net, rel=1e-9)
+    # Recovered heat reduces both the evaporator duty and the rejected heat.
+    assert rec.recuperator_duty > 0.0
+    assert rec.q_in < base.q_in
+    assert rec.q_out < base.q_out
+
+
+def test_recuperator_no_temperature_cross():
+    rec = _recup("n-Pentane", 0.8).solve()
+    s2, s4, s2r, s4r = rec.states[2], rec.states[4], rec.states[5], rec.states[6]
+    assert s4r.T >= s2.T - 1e-6      # hot outlet not below cold inlet
+    assert s2r.T <= s4.T + 1e-6      # cold outlet not above hot inlet
+
+
+def test_recuperator_balances_close_on_resource():
+    c = _recup("n-Pentane", 0.8)
+    res = c.solve_with_resource(m_brine=100.0, T_brine_in_C=150.0, pinch_evap=5.0)
+    assert abs(res.energy_balance_residual) < 1e-9
+    assert abs(res.exergy_balance_residual) < 1e-6
+    assert "recuperator" in res.exergy_destruction
+
+
+def test_recuperator_raises_brine_reinjection_temperature():
+    # The geothermal nuance: internal recovery means the brine gives up less
+    # heat, so it is reinjected hotter (worse resource utilization).
+    plain = _recup("n-Pentane", 0.0).solve_with_resource(
+        m_brine=100.0, T_brine_in_C=150.0, pinch_evap=5.0)
+    recup = _recup("n-Pentane", 0.8).solve_with_resource(
+        m_brine=100.0, T_brine_in_C=150.0, pinch_evap=5.0)
+    assert recup.brine_T_out > plain.brine_T_out + 1.0
+
+
+# --- pressure drops (Tier 2) ------------------------------------------------ #
+def test_pressure_drop_validation():
+    with _pytest.raises(ValueError):
+        ORCCycle("Isobutane", T_evap_C=120.0, T_cond_C=30.0, dp_evap_frac=-0.01)
+    with _pytest.raises(ValueError):
+        ORCCycle("Isobutane", T_evap_C=120.0, T_cond_C=30.0, dp_cond_frac=-0.01)
+
+
+def test_zero_pressure_drop_is_backward_compatible():
+    a = ORCCycle("Isobutane", T_evap_C=120.0, T_cond_C=30.0).solve()
+    b = ORCCycle("Isobutane", T_evap_C=120.0, T_cond_C=30.0,
+                 dp_evap_frac=0.0, dp_cond_frac=0.0).solve()
+    assert a.w_net == _pytest.approx(b.w_net, rel=1e-12)
+
+
+def test_pressure_drops_cost_net_power():
+    base = ORCCycle("Isobutane", T_evap_C=120.0, T_cond_C=30.0).solve()
+    drop = ORCCycle("Isobutane", T_evap_C=120.0, T_cond_C=30.0,
+                    dp_evap_frac=0.05, dp_cond_frac=0.10).solve()
+    assert drop.w_pump > base.w_pump          # pump must lift higher
+    assert drop.w_turbine < base.w_turbine    # raised back-pressure
+    assert drop.w_net < base.w_net
+    assert drop.eta_th < base.eta_th
+
+
+def test_pressure_drop_balances_close_on_resource():
+    res = ORCCycle("Isobutane", T_evap_C=120.0, T_cond_C=30.0,
+                   dp_evap_frac=0.05, dp_cond_frac=0.10).solve_with_resource(
+        m_brine=100.0, T_brine_in_C=150.0, pinch_evap=5.0)
+    assert abs(res.energy_balance_residual) < 1e-9
+    assert abs(res.exergy_balance_residual) < 1e-6

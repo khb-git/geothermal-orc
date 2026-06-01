@@ -48,6 +48,7 @@ class CycleResult:
     eta_th: float
     eta_carnot: float
     turbine_exit_quality: float          # Q4, -1 if superheated
+    recuperator_duty: float = 0.0        # J/kg recovered internally (0 if none)
 
     # Extensive (resource-coupled); None otherwise
     m_wf: Optional[float] = None         # kg/s
@@ -83,7 +84,7 @@ class CycleResult:
 
 
 class ORCCycle:
-    """A subcritical, non-recuperated binary ORC."""
+    """A subcritical binary ORC, optionally recuperated."""
 
     def __init__(
         self,
@@ -93,6 +94,9 @@ class ORCCycle:
         superheat: float = 0.0,
         eta_pump: float = 0.75,
         eta_turbine: float = 0.80,
+        recuperator_effectiveness: float = 0.0,
+        dp_evap_frac: float = 0.0,
+        dp_cond_frac: float = 0.0,
         brine_fluid: str = "Water",
         P_brine: float = 1.0e6,
         T0: float = DEAD_STATE_T,
@@ -103,6 +107,13 @@ class ORCCycle:
         self.superheat = superheat
         self.eta_pump = eta_pump
         self.eta_turbine = eta_turbine
+        if not 0.0 <= recuperator_effectiveness < 1.0:
+            raise ValueError("recuperator_effectiveness must be in [0, 1)")
+        self.recup_eps = recuperator_effectiveness
+        if dp_evap_frac < 0.0 or dp_cond_frac < 0.0:
+            raise ValueError("pressure-drop fractions must be non-negative")
+        self.dp_evap_frac = dp_evap_frac
+        self.dp_cond_frac = dp_cond_frac
         self.brine_fluid = brine_fluid
         self.P_brine = P_brine
         self.T0 = T0
@@ -122,32 +133,61 @@ class ORCCycle:
     # ------------------------------------------------------------------ #
     def _state_points(self) -> Dict[int, State]:
         f = self.fluid
+        # Non-isobaric heat exchange: the pump must deliver above the
+        # evaporation pressure (high-side drop) and the turbine exhausts above
+        # the condensing pressure (low-side drop).  Both cut net power.
+        P_pump_out = self.P_evap * (1.0 + self.dp_evap_frac)
+        P_turb_out = self.P_cond * (1.0 + self.dp_cond_frac)
+
         s1 = State.from_PQ(f, self.P_cond, 0.0)                 # sat liquid
         # Pump: isentropic target then efficiency.
-        h2s = PropsSI("H", "P", self.P_evap, "S", s1.s, f)
+        h2s = PropsSI("H", "P", P_pump_out, "S", s1.s, f)
         h2 = s1.h + (h2s - s1.h) / self.eta_pump
-        s2 = State.from_Ph(f, self.P_evap, h2)
+        s2 = State.from_Ph(f, P_pump_out, h2)
         # Evaporator outlet: saturated vapour, optionally superheated.
         if self.superheat > 0.0:
             s3 = State.from_TP(f, self.T_evap + self.superheat, self.P_evap)
         else:
             s3 = State.from_PQ(f, self.P_evap, 1.0)
-        # Turbine: isentropic target then efficiency.
-        h4s = PropsSI("H", "P", self.P_cond, "S", s3.s, f)
+        # Turbine: isentropic target then efficiency (expands to raised back-pressure).
+        h4s = PropsSI("H", "P", P_turb_out, "S", s3.s, f)
         h4 = s3.h - self.eta_turbine * (s3.h - h4s)
-        s4 = State.from_Ph(f, self.P_cond, h4)
-        return {1: s1, 2: s2, 3: s3, 4: s4}
+        s4 = State.from_Ph(f, P_turb_out, h4)
+        states = {1: s1, 2: s2, 3: s3, 4: s4}
+
+        # Optional recuperator: turbine exhaust (4) preheats pump outlet (2).
+        # Effectiveness-NTU definition Q = eps * Q_max, with Q_max the smaller of
+        # what each stream could exchange (hot cooled to the cold inlet T, cold
+        # heated to the hot inlet T).  Q <= Q_max guarantees no temperature cross.
+        if self.recup_eps > 0.0 and s4.T > s2.T:
+            h_hot_to_coldin = PropsSI("H", "T", s2.T, "P", s4.P, f)
+            h_cold_to_hotin = PropsSI("H", "T", s4.T, "P", s2.P, f)
+            Q_hot_max = s4.h - h_hot_to_coldin     # hot stream cooled to T2
+            Q_cold_max = h_cold_to_hotin - s2.h    # cold stream heated to T4
+            Q_recup = self.recup_eps * max(0.0, min(Q_hot_max, Q_cold_max))
+            if Q_recup > 0.0:
+                s2r = State.from_Ph(f, s2.P, s2.h + Q_recup)  # evaporator inlet
+                s4r = State.from_Ph(f, s4.P, s4.h - Q_recup)  # condenser inlet
+                states[5] = s2r
+                states[6] = s4r
+        return states
 
     def solve(self) -> CycleResult:
         """Intensive cycle (per kg working fluid)."""
         st = self._state_points()
         s1, s2, s3, s4 = st[1], st[2], st[3], st[4]
 
+        # With a recuperator the evaporator starts from 2' (=5) and the
+        # condenser from 4' (=6); work terms are unchanged.
+        h_evap_in = st[5].h if 5 in st else s2.h
+        h_cond_in = st[6].h if 6 in st else s4.h
+        q_recup = (st[5].h - s2.h) if 5 in st else 0.0
+
         w_pump = s2.h - s1.h
         w_turb = s3.h - s4.h
         w_net = w_turb - w_pump
-        q_in = s3.h - s2.h
-        q_out = s4.h - s1.h
+        q_in = s3.h - h_evap_in
+        q_out = h_cond_in - s1.h
         eta_th = w_net / q_in
         eta_carnot = 1.0 - self.T_cond / self.T_evap
 
@@ -162,6 +202,7 @@ class ORCCycle:
             eta_th=eta_th,
             eta_carnot=eta_carnot,
             turbine_exit_quality=s4.Q,
+            recuperator_duty=q_recup,
         )
 
     # ------------------------------------------------------------------ #
@@ -188,8 +229,10 @@ class ORCCycle:
         T_brine_in = T_brine_in_C + 273.15
         q_in = base.q_in
 
-        # Evaporator cold-side enthalpy span (state 2 -> state 3).
-        h_cold_in, h_cold_out = st[2].h, st[3].h
+        # Evaporator cold-side enthalpy span.  With a recuperator the brine only
+        # supplies heat above the recuperated inlet 2' (=state 5).
+        h_cold_in = st[5].h if 5 in st else st[2].h
+        h_cold_out = st[3].h
         dh_cold = h_cold_out - h_cold_in
 
         # --- fast pinch sizing ------------------------------------------- #
@@ -271,12 +314,19 @@ class ORCCycle:
         # --- exergy destruction (T0 * entropy generation) --------------- #
         T0 = self.T0
         s1, s2, s3, s4 = st[1], st[2], st[3], st[4]
+        # Recuperated stream states feeding the evaporator (2') and condenser (4').
+        s_evap_in = st[5].s if 5 in st else s2.s
+        s_cond_in = st[6].s if 6 in st else s4.s
         Edest = {
             "pump":       T0 * m_wf * (s2.s - s1.s),
-            "evaporator": T0 * (m_wf * (s3.s - s2.s) + m_brine * (s_b_out - s_b_in)),
+            "evaporator": T0 * (m_wf * (s3.s - s_evap_in) + m_brine * (s_b_out - s_b_in)),
             "turbine":    T0 * m_wf * (s4.s - s3.s),
-            "condenser":  T0 * (m_wf * (s1.s - s4.s) + m_cw * (s_cw_out - s_cw_in)),
+            "condenser":  T0 * (m_wf * (s1.s - s_cond_in) + m_cw * (s_cw_out - s_cw_in)),
         }
+        if 5 in st:
+            # Internal recuperator: cold side 2->2' gains entropy, hot side 4->4'
+            # loses it; the sum is the irreversibility of the internal exchange.
+            Edest["recuperator"] = T0 * m_wf * ((st[5].s - s2.s) + (st[6].s - s4.s))
         Edest_total = sum(Edest.values())
 
         # --- exergy bookkeeping referenced to the dead state ------------- #
@@ -305,6 +355,7 @@ class ORCCycle:
             eta_th=base.eta_th,
             eta_carnot=base.eta_carnot,
             turbine_exit_quality=base.turbine_exit_quality,
+            recuperator_duty=base.recuperator_duty,
             m_wf=m_wf,
             m_brine=m_brine,
             brine_T_in=T_brine_in,

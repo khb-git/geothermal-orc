@@ -38,6 +38,15 @@ from .geothermal import (
     GeothermalResource,
 )
 from .optimization import optimize_evaporation_temperature, screen_fluids
+from .transcritical import TranscriticalCycle
+from .mixtures import (
+    MixtureCycle,
+    MixtureCycleResult,
+    mixture_string,
+    bubble_dew,
+    temperature_glide,
+    screen_compositions,
+)
 from .plant import (
     PlantResult,
     SeasonalResult,
@@ -52,6 +61,7 @@ from .plant import (
     decline_curves,
     profile_UA,
     part_load_turbine_efficiency,
+    pinch_area_tradeoff,
 )
 
 __version__ = "0.1.0"
@@ -92,5 +102,13 @@ __all__ = [
     "decline_curves",
     "profile_UA",
     "part_load_turbine_efficiency",
+    "pinch_area_tradeoff",
+    "MixtureCycle",
+    "MixtureCycleResult",
+    "mixture_string",
+    "bubble_dew",
+    "temperature_glide",
+    "screen_compositions",
+    "TranscriticalCycle",
     "__version__",
 ]

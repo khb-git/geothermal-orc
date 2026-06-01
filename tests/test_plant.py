@@ -170,3 +170,17 @@ def test_decline_curves_decline_monotonically(resource):
     assert fixed[0] > fixed[1] > 0.0
     # at year 0 the fixed plant is, by construction, the design point
     assert fixed[0] == pytest.approx(reopt[0], rel=0.03)
+
+
+# --- pinch / area / power trade-off (Tier 2) -------------------------------- #
+from geothermal_orc import pinch_area_tradeoff
+
+
+def test_pinch_area_tradeoff_monotonic(resource):
+    pinches = [3.0, 6.0, 9.0, 12.0]
+    p, W, UA = pinch_area_tradeoff("Isobutane", resource, T_evap_C=120.0,
+                                   pinches_C=pinches)
+    assert len(p) == len(W) == len(UA) == 4
+    # Tighter pinch -> more power but more conductance (area).
+    assert W[0] > W[1] > W[2] > W[3]
+    assert UA[0] > UA[1] > UA[2] > UA[3]

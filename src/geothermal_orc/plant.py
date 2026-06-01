@@ -444,3 +444,36 @@ def decline_curves(
         fixed.append(od.W_net_plant if od.feasible else 0.0)
 
     return design, np.array(Tb), np.array(reopt), np.array(fixed)
+
+
+# --- pinch / area / power trade-off ----------------------------------------- #
+def pinch_area_tradeoff(
+    fluid: str,
+    resource: GeothermalResource,
+    T_evap_C: float,
+    pinches_C: Sequence[float],
+    *,
+    T_cond_C: float = 30.0,
+    eta_pump: float = 0.75,
+    eta_turbine: float = 0.80,
+    dp_evap_frac: float = 0.0,
+    dp_cond_frac: float = 0.0,
+):
+    """Trade-off between evaporator pinch, conductance, and net power.
+
+    At fixed evaporation temperature, a tighter pinch lets the brine be cooled
+    closer to the working fluid — more flow, more power — but needs more heat-
+    exchanger area (a larger UA).  Returns ``(pinches, W_net, UA_evap)`` so the
+    diminishing-returns 'knee' of power versus UA can be plotted."""
+    W, UA = [], []
+    for p in pinches_C:
+        res = ORCCycle(
+            fluid, T_evap_C=T_evap_C, T_cond_C=T_cond_C, eta_pump=eta_pump,
+            eta_turbine=eta_turbine, dp_evap_frac=dp_evap_frac,
+            dp_cond_frac=dp_cond_frac,
+        ).solve_with_resource(
+            m_brine=resource.mass_flow, T_brine_in_C=resource.T_reservoir_C,
+            pinch_evap=p)
+        W.append(res.W_net)
+        UA.append(profile_UA(res.evaporator))
+    return np.asarray(pinches_C, dtype=float), np.array(W), np.array(UA)
