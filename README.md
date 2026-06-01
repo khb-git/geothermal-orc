@@ -98,14 +98,26 @@ print(f"LCOE {econ.lcoe:.0f} USD/MWh  |  {econ.specific_capex:,.0f} USD/kW  "
       f"|  wells {econ.capex_wells/econ.capex_total*100:.0f}% of CAPEX")
 ```
 
-The full walkthrough — a thirteen-act story from "what is a binary plant" to a
-design verdict, advanced cycles, and the cost of a megawatt-hour, with the plant
-schematic, *T*–*s* and *T*–*Q* diagrams, an exergy-destruction breakdown, the
-gross-to-net waterfall and seasonal output, fluid screening, silica curves, a
-re-optimized-vs-fixed-hardware decline, the recuperator/pressure-drop/pinch-area
-refinements, the zeotropic and transcritical advanced cycles, the CAPEX
-breakdown and cost-optimal-vs-power-optimal pinch, and an interactive design
-explorer — is in
+…and the `finance` layer turns that cost into an investment decision:
+
+```python
+from geothermal_orc import project_cashflow, ProjectAssumptions, monte_carlo
+
+pr = project_cashflow(econ, ProjectAssumptions(ppa_price=120.0))
+print(f"NPV ${pr.npv/1e6:.1f}M | IRR {pr.irr*100:.0f}% | payback {pr.payback_yr:.0f} yr")
+mc = monte_carlo(econ, ProjectAssumptions(ppa_price=110.0))
+print(f"P(NPV>0) = {mc['p_npv_positive']*100:.0f}%")
+```
+
+The full walkthrough — a fourteen-act story from "what is a binary plant" to a
+design verdict, advanced cycles, the cost of a megawatt-hour, and whether to
+build it, with the plant schematic, *T*–*s* and *T*–*Q* diagrams, an
+exergy-destruction breakdown, the gross-to-net waterfall and seasonal output,
+fluid screening, silica curves, a re-optimized-vs-fixed-hardware decline, the
+recuperator/pressure-drop/pinch-area refinements, the zeotropic and transcritical
+advanced cycles, the CAPEX breakdown and cost-optimal-vs-power-optimal pinch, and
+the NPV/IRR and Monte-Carlo risk analysis, plus an interactive design explorer —
+is in
 [`notebooks/demo.ipynb`](notebooks/demo.ipynb) (executed, with plots embedded).
 
 **Viewing it:** GitHub renders the notebook with all plots inline; if its viewer
@@ -129,6 +141,7 @@ and run all cells — Colab installs the package and gives you a live kernel.
 | `mixtures` | Zeotropic working-fluid mixtures with temperature glide: `MixtureCycle` (built on P-T/P-Q flashes since CoolProp lacks mixture P-H/P-S), glide helpers, and `screen_compositions`. |
 | `transcritical` | `TranscriticalCycle`: supercritical heat addition (no evaporation plateau) with subcritical condensing, for resources whose hot end a subcritical fluid cannot reach. |
 | `economics` | Techno-economics: Turton module costing of every component (CEPCI-updated), geothermal well costs, and `levelized_cost` → LCOE, plus `pinch_lcoe_tradeoff` (cost-optimal vs power-optimal design) and `lcoe_sensitivity`. |
+| `finance` | Project finance and risk: a discounted-cash-flow model (`project_cashflow` → NPV, IRR, payback, break-even PPA) with optional debt, tax, and depreciation, and a `monte_carlo` layer that turns the point LCOE into a distribution and a probability of positive NPV. |
 
 State-point numbering follows DiPippo (2016): **1** condenser outlet / pump
 inlet, **2** pump outlet, **3** evaporator outlet / turbine inlet, **4** turbine
@@ -142,14 +155,14 @@ outlet / condenser inlet.
 pytest -q
 ```
 
-The suite is **150 tests** and targets correctness rather than coverage theatre:
+The suite is **156 tests** and targets correctness rather than coverage theatre:
 energy- and exergy-balance closure on resource-coupled solves, pinch behaviour
 across phase change, silica-correlation values against the literature, the
 classifier's wet/dry/isentropic verdicts, optimizer feasibility/ranking,
 parasitic and off-design plant behaviour, recuperator/pressure-drop/mixture/
 transcritical physics, techno-economic LCOE in the published range with the
-right cost structure, and a `test_benchmarks.py` suite that pins headline
-numbers to published values.
+right cost structure, the break-even-equals-LCOE finance identity, and a
+`test_benchmarks.py` suite that pins headline numbers to published values.
 
 > Performance note: `solve_with_resource` precomputes the (flow-independent)
 > working-fluid side of the evaporator profile once and runs the pinch root-find
@@ -185,6 +198,15 @@ This package is honest about what is *validated* versus what is merely
   resources (~5% at 120 °C, per Heberle/Chys) and transcritical propane helps at
   150 °C (~5%, per Astolfi), while neither beats a well-matched pure fluid where
   one already fits.
+- **Techno-economics in range:** Turton module costing plus geothermal wells
+  gives ~$90/MWh and ~$6,700/kW for the 150 °C base case (inside the published
+  band for medium-temperature binary; Lazard/IRENA), with wells the dominant
+  (~60%+) share of CAPEX.
+- **Finance reproduces the LCOE:** under all-equity, no-tax, matching-discount
+  assumptions the break-even PPA equals the Tier 3 LCOE to within rounding and
+  the IRR at that price equals the discount rate — the cash-flow model is
+  internally consistent with the cost model before debt, tax, escalation, and
+  Monte-Carlo risk are layered on.
 
 **Plausibility checks** (right physics, right ballpark — *not* matched to a
 named plant):
@@ -206,8 +228,8 @@ named plant):
 
 The core cycle now spans subcritical and transcritical operation, pure fluids
 and zeotropic mixtures, with an optional recuperator, heat-exchanger pressure
-drops, a reduced balance-of-plant, off-design behaviour, and a techno-economic
-LCOE layer. What it **models**:
+drops, a reduced balance-of-plant, off-design behaviour, a techno-economic LCOE
+layer, and a project-finance/risk layer. What it **models**:
 
 - Subcritical and **transcritical** cycles; **pure fluids and zeotropic
   mixtures** (temperature glide); optional **recuperator**; heat-exchanger
@@ -217,13 +239,19 @@ LCOE layer. What it **models**:
 - **Techno-economics:** component sizing and Turton module costing, geothermal
   well costs, **LCOE**, and the **cost-optimal vs power-optimal** design question
   (how much heat-exchanger area is worth buying).
+- **Project finance & risk:** discounted cash flow with optional debt, tax and
+  depreciation → **NPV, IRR, payback, break-even PPA**, and a **Monte-Carlo**
+  distribution of LCOE/NPV with the probability of a positive return.
 
 Deliberate simplifications that remain:
 
 - **First-order costing.** Turton module costing with material/pressure factors
   held at a carbon-steel, low-pressure baseline; well count, well cost, O&M, and
-  discount rate are documented, adjustable assumptions, not a financed project
-  model (no debt/equity split, tax, depreciation, or escalation).
+  finance terms are documented, adjustable assumptions, not a bankable model.
+- **Monte-Carlo holds the plant design fixed.** Uncertainty is propagated through
+  the economic/financial drivers (PPA, well cost, capacity factor, cost of
+  capital); resource-temperature uncertainty enters only through the
+  deterministic sensitivities, not a re-solved thermodynamic sample.
 - **Reduced off-design.** A Stodola swallowing law plus fixed UA and an
   illustrative part-load turbine curve, not a manufacturer's component map.
 - **Mixture comparison anchored on mean condensing temperature** (a fair proxy);
@@ -234,9 +262,10 @@ Deliberate simplifications that remain:
 
 Roadmap status: parasitics, ambient/seasonal, and off-design (Tier 1), the
 fidelity layer — recuperation, pressure drops, mixtures, transcritical (Tier 2) —
-and the techno-economic LCOE layer (Tier 3) are **done**; a fully
-cooling-water-matched condenser and a financed-project model (debt/equity, tax,
-escalation) are the natural next steps.
+the techno-economic LCOE layer (Tier 3), and the project-finance/risk layer
+(Tier 4) are **done**; a fully cooling-water-matched condenser with floating
+condensing pressure, and Monte-Carlo over a re-solved thermodynamic model
+(resource-temperature uncertainty), are the natural next steps.
 
 ---
 
@@ -270,6 +299,9 @@ escalation) are the natural next steps.
   gain) and transcritical cycles favoured, validating the Tier 2/3 findings.
 - Lazard, *Levelized Cost of Energy+*, and IRENA, *Renewable Power Generation
   Costs* — geothermal LCOE benchmark (~$60–150/MWh for medium-temperature binary).
+- W. Short, D. J. Packey, T. Holt, *A Manual for the Economic Evaluation of
+  Energy Efficiency and Renewable Energy Technologies*, NREL/TP-462-5173 (1995) —
+  LCOE, capital-recovery factor, and discounted-cash-flow conventions.
 
 ---
 

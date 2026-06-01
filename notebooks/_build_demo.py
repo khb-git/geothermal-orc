@@ -75,6 +75,7 @@ from geothermal_orc import (
 plt.rcParams.update({
     "figure.dpi": 110, "font.size": 11, "axes.grid": True,
     "grid.alpha": 0.3, "axes.axisbelow": True,
+    "text.parse_math": False,   # treat "$" as a literal dollar sign in labels
 })
 print("geothermal-orc version:", g.__version__)
 print("fluids in library:", len(LIBRARY))""")
@@ -876,8 +877,8 @@ colors = ["#2a7d6f", "#457b9d", "#bbbbbb", "#e76f51", "#cbb994", "#8b3a1f"]
 fig, ax = plt.subplots(figsize=(8, 4))
 ax.bar(labels, vals, color=colors[:len(labels)])
 ax.set_ylabel("CAPEX  [USD million]")
-ax.set_title(f"Where the money goes — \${econ.capex_total/1e6:.0f}M total, "
-             f"LCOE \${econ.lcoe:.0f}/MWh")
+ax.set_title(f"Where the money goes — ${econ.capex_total/1e6:.0f}M total, "
+             f"LCOE ${econ.lcoe:.0f}/MWh")
 plt.tight_layout(); plt.show()
 
 cap = (econ.crf * econ.capex_total) / econ.annual_energy_MWh
@@ -903,9 +904,9 @@ _, _, L_shallow = pinch_lcoe_tradeoff(
 
 fig, ax1 = plt.subplots(figsize=(8, 4.4))
 ax1.plot(pinches, L_deep, "o-", color="#8b3a1f",
-         label="LCOE — expensive wells (\$5M x3)")
+         label="LCOE — expensive wells ($5M x3)")
 ax1.plot(pinches, L_shallow, "s-", color="#2a9d8f",
-         label="LCOE — cheap wells (\$1.5M x2)")
+         label="LCOE — cheap wells ($1.5M x2)")
 for L, c in [(L_deep, "#8b3a1f"), (L_shallow, "#2a9d8f")]:
     i = int(np.nanargmin(L))
     ax1.scatter([pinches[i]], [L[i]], s=160, facecolors="none",
@@ -939,7 +940,7 @@ for i, (name, param, (lo, hi)) in enumerate(specs):
 ax.axvline(base, color="#1a1f2b", lw=1.2)
 ax.set_yticks(range(len(specs))); ax.set_yticklabels([s[0] for s in specs])
 ax.set_xlabel("LCOE  [USD/MWh]")
-ax.set_title(f"What moves the LCOE (base \${base:.0f}/MWh)")
+ax.set_title(f"What moves the LCOE (base ${base:.0f}/MWh)")
 plt.tight_layout(); plt.show()""")
 
 takeaway(r"""Optimizing for power is not optimizing for cost. On a deep,
@@ -951,8 +952,96 @@ marginal thermodynamic gain like recuperation, as the literature finds, rarely
 pays for its extra hardware.""")
 
 # ============================================================================ #
-# ACT 13
-md(r"""## Act 13 · Your turn — change the resource
+# ACT 13 (Tier 4: project finance & risk)
+md(r"""## Act 13 · Is it worth building? Finance and risk
+
+LCOE is a cost, not a verdict. To decide whether to *build*, you need revenue — a
+power-purchase price — and a discounted cash flow that returns the net present
+value (NPV), the internal rate of return (IRR), and the payback period. And
+because every input is a guess, the honest answer is not a number but a
+*distribution*.
+
+First, the bridge back to Act 12: sweep the PPA price and watch where NPV crosses
+zero.""")
+
+code(r"""from geothermal_orc.finance import (ProjectAssumptions, project_cashflow,
+                                   monte_carlo)
+
+ppas = np.linspace(60, 150, 19)
+npvs = [project_cashflow(econ, ProjectAssumptions(ppa_price=p,
+                                                  om_escalation=0.0)).npv / 1e6
+        for p in ppas]
+
+fig, ax = plt.subplots(figsize=(7.8, 4.2))
+ax.plot(ppas, npvs, "-", color="#457b9d", lw=2)
+ax.axhline(0, color="#1a1f2b", lw=1)
+ax.axvline(econ.lcoe, color="#8b3a1f", ls="--")
+ax.annotate(f"break-even = LCOE = ${econ.lcoe:.0f}/MWh",
+            (econ.lcoe, 0), textcoords="offset points", xytext=(8, 18),
+            color="#8b3a1f", fontsize=9)
+ax.set_xlabel("PPA price  [USD/MWh]"); ax.set_ylabel("NPV  [USD million]")
+ax.set_title("The project clears exactly above its LCOE")
+plt.tight_layout(); plt.show()
+
+print(f"break-even PPA = ${econ.lcoe:.1f}/MWh  (identical to the Tier 3 LCOE — "
+      f"the LCOE *is* the zero-NPV price)")""")
+
+md(r"""The break-even PPA lands exactly on the LCOE — it must, because the LCOE
+is by definition the price at which the project just breaks even. Now sign a real
+contract above that line and look at the cash flow over the plant's life — the
+**J-curve** — with and without debt.""")
+
+code(r"""fig, ax = plt.subplots(figsize=(7.8, 4.2))
+for label, proj, c in [
+        ("all equity", ProjectAssumptions(ppa_price=120.0), "#457b9d"),
+        ("60% debt @ 6%", ProjectAssumptions(ppa_price=120.0,
+                                             debt_fraction=0.6, debt_rate=0.06),
+         "#2a9d8f")]:
+    pr = project_cashflow(econ, proj)
+    cum = np.cumsum(pr.cashflow) / 1e6
+    ax.plot(pr.years, cum, "-o", ms=3, color=c,
+            label=f"{label}: IRR {pr.irr*100:.0f}%, payback {pr.payback_yr:.0f} yr")
+ax.axhline(0, color="#1a1f2b", lw=1)
+ax.set_xlabel("year"); ax.set_ylabel("cumulative equity cash flow  [USD million]")
+ax.set_title("The J-curve at a $120/MWh PPA — debt steepens the equity return")
+ax.legend(loc="lower right"); plt.tight_layout(); plt.show()""")
+
+md(r"""Finally, the truth: no input is certain. Sample the PPA price, the well
+cost, the capacity factor, and the cost of capital, and the single LCOE becomes a
+distribution — and "is it worth it?" becomes a *probability*.""")
+
+code(r"""mc = monte_carlo(econ, ProjectAssumptions(ppa_price=110.0), n=4000, seed=1)
+
+fig, ax = plt.subplots(figsize=(7.8, 4.2))
+ax.hist(mc["npv"] / 1e6, bins=40, color="#2a9d8f", alpha=0.85)
+for q, c, lbl in [(10, "#8b3a1f", "P10"), (50, "#1a1f2b", "P50"),
+                  (90, "#8b3a1f", "P90")]:
+    x = mc["npv_percentiles"][q] / 1e6
+    ax.axvline(x, color=c, ls="--")
+    ax.annotate(lbl, (x, 0), textcoords="offset points", xytext=(2, 6),
+                color=c, fontsize=8)
+ax.axvline(0, color="#e76f51", lw=2)
+ax.set_xlabel("NPV  [USD million]"); ax.set_ylabel("frequency")
+ax.set_title(f"Monte Carlo: P(NPV > 0) = {mc['p_npv_positive']*100:.0f}% "
+             f"at a $110/MWh PPA")
+plt.tight_layout(); plt.show()
+
+lp, npp = mc["lcoe_percentiles"], mc["npv_percentiles"]
+print(f"LCOE  P10/P50/P90 = ${lp[10]:.0f} / ${lp[50]:.0f} / ${lp[90]:.0f} /MWh")
+print(f"NPV   P10/P50/P90 = ${npp[10]/1e6:+.1f} / ${npp[50]/1e6:+.1f} / "
+      f"${npp[90]/1e6:+.1f} M")""")
+
+takeaway(r"""The LCOE is the zero-NPV price — so the deterministic Act 12 number
+is really the hinge of the investment decision. Above it the project earns a
+return; cheap debt levers the equity IRR higher; and once you admit that the
+PPA, the wells, and the capacity factor are all uncertain, the deliverable stops
+being a single LCOE and becomes a probability of success — here ~80% at a
+$110/MWh contract. That distribution, not a point estimate, is what a developer
+actually takes to an investment committee.""")
+
+# ============================================================================ #
+# ACT 14
+md(r"""## Act 14 · Your turn — change the resource
 
 The function below is the whole pipeline in miniature: give it a fluid, brine
 temperature, condensing temperature, and pinch, and it finds a near-optimal
@@ -1030,6 +1119,11 @@ about what is *validated* versus what is *plausible*:
   wells gives an LCOE of ~$90/MWh and ~$6,700/kW for the 150 °C base case —
   inside the published band for medium-temperature binary plants (Lazard, IRENA)
   — with wells the dominant (~60%+) share of CAPEX, as expected for geothermal.
+* **The finance model reproduces the LCOE before generalizing:** under
+  all-equity, no-tax, matching-discount assumptions the break-even PPA equals the
+  Tier 3 LCOE to within rounding, and the IRR at that price equals the discount
+  rate — the cash-flow model is internally consistent with the cost model before
+  debt, tax, escalation, and Monte-Carlo risk are layered on.
 
 **Plausibility checks** (right physics, right range — not matched to a named
 plant):

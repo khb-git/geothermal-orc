@@ -49,6 +49,13 @@ from .economics import (
     pinch_lcoe_tradeoff,
     lcoe_sensitivity,
 )
+from .finance import (
+    ProjectAssumptions,
+    ProjectResult,
+    project_cashflow,
+    breakeven_ppa,
+    monte_carlo,
+)
 from .mixtures import (
     MixtureCycle,
     MixtureCycleResult,
@@ -128,5 +135,10 @@ __all__ = [
     "levelized_cost",
     "pinch_lcoe_tradeoff",
     "lcoe_sensitivity",
+    "ProjectAssumptions",
+    "ProjectResult",
+    "project_cashflow",
+    "breakeven_ppa",
+    "monte_carlo",
     "__version__",
 ]
