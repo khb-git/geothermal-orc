@@ -39,6 +39,16 @@ from .geothermal import (
 )
 from .optimization import optimize_evaporation_temperature, screen_fluids
 from .transcritical import TranscriticalCycle
+from .economics import (
+    EconomicAssumptions,
+    EconomicResult,
+    bare_module_cost,
+    capital_recovery_factor,
+    plant_capex,
+    levelized_cost,
+    pinch_lcoe_tradeoff,
+    lcoe_sensitivity,
+)
 from .mixtures import (
     MixtureCycle,
     MixtureCycleResult,
@@ -110,5 +120,13 @@ __all__ = [
     "temperature_glide",
     "screen_compositions",
     "TranscriticalCycle",
+    "EconomicAssumptions",
+    "EconomicResult",
+    "bare_module_cost",
+    "capital_recovery_factor",
+    "plant_capex",
+    "levelized_cost",
+    "pinch_lcoe_tradeoff",
+    "lcoe_sensitivity",
     "__version__",
 ]

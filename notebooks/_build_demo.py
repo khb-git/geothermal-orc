@@ -852,8 +852,107 @@ for low-enthalpy resources (~5% at 120 °C), and a transcritical cycle pays off 
 Which one wins is set by the resource, not by a rule of thumb.""")
 
 # ============================================================================ #
-# ACT 12
-md(r"""## Act 12 · Your turn — change the resource
+# ACT 12 (Tier 3: techno-economics)
+md(r"""## Act 12 · The cost of a megawatt-hour
+
+Every act so far has chased *power*. But a developer does not sell megawatts;
+they sell megawatt-hours, and they live or die by the **cost** of those
+megawatt-hours. So we turn the design into money: size every component, cost it
+with the Turton module method (the standard in ORC techno-economics), add the
+geothermal **wells** and operations, and annualize with a capital-recovery
+factor to get the **levelized cost of electricity (LCOE)**.""")
+
+code(r"""from geothermal_orc.economics import (levelized_cost, pinch_lcoe_tradeoff,
+                                     lcoe_sensitivity, EconomicAssumptions)
+
+econ = levelized_cost("Isobutane", resource, ambient_C=10.0, T_evap_C=95.0)
+
+comp = econ.component_costs
+indirects = econ.capex_surface - sum(comp.values())
+labels = list(comp.keys()) + ["indirects", "wells"]
+vals = [comp[k] / 1e6 for k in comp] + [indirects / 1e6, econ.capex_wells / 1e6]
+colors = ["#2a7d6f", "#457b9d", "#bbbbbb", "#e76f51", "#cbb994", "#8b3a1f"]
+
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.bar(labels, vals, color=colors[:len(labels)])
+ax.set_ylabel("CAPEX  [USD million]")
+ax.set_title(f"Where the money goes — \${econ.capex_total/1e6:.0f}M total, "
+             f"LCOE \${econ.lcoe:.0f}/MWh")
+plt.tight_layout(); plt.show()
+
+cap = (econ.crf * econ.capex_total) / econ.annual_energy_MWh
+om = econ.annual_cost / econ.annual_energy_MWh - cap
+print(f"net power      {econ.W_net_plant/1e6:.2f} MW")
+print(f"specific CAPEX ${econ.specific_capex:,.0f}/kW   (wells "
+      f"{econ.capex_wells/econ.capex_total*100:.0f}% of total)")
+print(f"LCOE           {econ.lcoe:.1f} USD/MWh   (capital {cap:.0f}, O&M {om:.0f})")""")
+
+md(r"""That is one design. The deeper question is whether the **cheapest** design
+is the one that makes the **most power**. Recall the pinch from Act 10: a tighter
+pinch buys power but costs heat-exchanger area. Whether that is worth it depends
+on what your capital is tied up in — so we sweep the pinch for two resources: one
+with expensive wells (deep, the usual geothermal case) and one with cheap wells
+(shallow, or a retrofit where the surface plant dominates).""")
+
+code(r"""pinches = [2, 3, 4, 5, 6, 8, 10, 12]
+_, W, L_deep = pinch_lcoe_tradeoff("Isobutane", resource, 10.0, pinches,
+                                   T_evap_C=95.0)
+_, _, L_shallow = pinch_lcoe_tradeoff(
+    "Isobutane", resource, 10.0, pinches,
+    EconomicAssumptions(well_cost=1.5e6, n_wells=2), T_evap_C=95.0)
+
+fig, ax1 = plt.subplots(figsize=(8, 4.4))
+ax1.plot(pinches, L_deep, "o-", color="#8b3a1f",
+         label="LCOE — expensive wells (\$5M x3)")
+ax1.plot(pinches, L_shallow, "s-", color="#2a9d8f",
+         label="LCOE — cheap wells (\$1.5M x2)")
+for L, c in [(L_deep, "#8b3a1f"), (L_shallow, "#2a9d8f")]:
+    i = int(np.nanargmin(L))
+    ax1.scatter([pinches[i]], [L[i]], s=160, facecolors="none",
+                edgecolors=c, linewidths=2.2, zorder=5)
+ax1.set_xlabel("evaporator pinch  [K]"); ax1.set_ylabel("LCOE  [USD/MWh]")
+ax2 = ax1.twinx()
+ax2.plot(pinches, W / 1e6, ":", color="#457b9d", alpha=0.7)
+ax2.set_ylabel("net power  [MW]  (dotted)", color="#457b9d")
+ax1.set_title("Cost-optimal pinch (circled) vs the power-optimal tight pinch")
+ax1.legend(loc="upper center"); plt.tight_layout(); plt.show()
+
+print(f"power-optimal pinch : {pinches[int(np.argmax(W))]} K (tightest)")
+print(f"cost-optimal pinch  : {pinches[int(np.nanargmin(L_deep))]} K "
+      f"(expensive wells)  |  {pinches[int(np.nanargmin(L_shallow))]} K (cheap wells)")""")
+
+md(r"""Finally, what actually moves the number? A tornado of the LCOE against the
+assumptions that matter — the things a banker, not a thermodynamicist, worries
+about.""")
+
+code(r"""base = econ.lcoe
+specs = [("well cost", "well_cost", (3e6, 7e6)),
+         ("discount rate", "discount_rate", (0.06, 0.12)),
+         ("capacity factor", "capacity_factor", (0.90, 0.60)),
+         ("O&M (% CAPEX/yr)", "om_frac_capex", (0.02, 0.05))]
+fig, ax = plt.subplots(figsize=(8, 3.6))
+for i, (name, param, (lo, hi)) in enumerate(specs):
+    v = lcoe_sensitivity("Isobutane", resource, 10.0, param, [lo, hi],
+                         T_evap_C=95.0)
+    ax.barh(i, v[1] - base, left=base, color="#e76f51", alpha=0.85)
+    ax.barh(i, v[0] - base, left=base, color="#457b9d", alpha=0.85)
+ax.axvline(base, color="#1a1f2b", lw=1.2)
+ax.set_yticks(range(len(specs))); ax.set_yticklabels([s[0] for s in specs])
+ax.set_xlabel("LCOE  [USD/MWh]")
+ax.set_title(f"What moves the LCOE (base \${base:.0f}/MWh)")
+plt.tight_layout(); plt.show()""")
+
+takeaway(r"""Optimizing for power is not optimizing for cost. On a deep,
+well-dominated resource the cheapest MWh comes from the **tightest pinch you can
+afford** — squeeze the fixed wells for all the energy they can give. Only when
+the surface plant dominates does a wider pinch win. And the LCOE is set first by
+the wells, the capacity factor, and the cost of capital — which is exactly why a
+marginal thermodynamic gain like recuperation, as the literature finds, rarely
+pays for its extra hardware.""")
+
+# ============================================================================ #
+# ACT 13
+md(r"""## Act 13 · Your turn — change the resource
 
 The function below is the whole pipeline in miniature: give it a fluid, brine
 temperature, condensing temperature, and pinch, and it finds a near-optimal
@@ -927,6 +1026,10 @@ about what is *validated* versus what is *plausible*:
   exergy balances closed; zeotropic mixtures help low-enthalpy resources (~5% at
   120 °C) and transcritical propane helps at 150 °C (~5%), both consistent with
   the published consensus.
+* **Techno-economics lands in range:** Turton module costing plus geothermal
+  wells gives an LCOE of ~$90/MWh and ~$6,700/kW for the 150 °C base case —
+  inside the published band for medium-temperature binary plants (Lazard, IRENA)
+  — with wells the dominant (~60%+) share of CAPEX, as expected for geothermal.
 
 **Plausibility checks** (right physics, right range — not matched to a named
 plant):

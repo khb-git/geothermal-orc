@@ -88,12 +88,24 @@ print(f"gross {pr.W_gross/1e6:.2f} MW -> net-to-grid {pr.W_net_plant/1e6:.2f} MW
       f"({pr.net_gross_ratio*100:.0f}% of gross)")
 ```
 
-The full walkthrough — a twelve-act story from "what is a binary plant" to a
-design verdict and beyond, with the plant schematic, *T*–*s* and *T*–*Q*
-diagrams, an exergy-destruction breakdown, the gross-to-net waterfall and
-seasonal output, fluid screening, silica curves, a re-optimized-vs-fixed-hardware
-decline, the recuperator/pressure-drop/pinch-area refinements, the zeotropic and
-transcritical advanced cycles, and an interactive design explorer — is in
+And the `economics` layer turns net power into a cost of electricity:
+
+```python
+from geothermal_orc import levelized_cost
+
+econ = levelized_cost("Isobutane", resource, ambient_C=10.0, T_evap_C=95.0)
+print(f"LCOE {econ.lcoe:.0f} USD/MWh  |  {econ.specific_capex:,.0f} USD/kW  "
+      f"|  wells {econ.capex_wells/econ.capex_total*100:.0f}% of CAPEX")
+```
+
+The full walkthrough — a thirteen-act story from "what is a binary plant" to a
+design verdict, advanced cycles, and the cost of a megawatt-hour, with the plant
+schematic, *T*–*s* and *T*–*Q* diagrams, an exergy-destruction breakdown, the
+gross-to-net waterfall and seasonal output, fluid screening, silica curves, a
+re-optimized-vs-fixed-hardware decline, the recuperator/pressure-drop/pinch-area
+refinements, the zeotropic and transcritical advanced cycles, the CAPEX
+breakdown and cost-optimal-vs-power-optimal pinch, and an interactive design
+explorer — is in
 [`notebooks/demo.ipynb`](notebooks/demo.ipynb) (executed, with plots embedded).
 
 **Viewing it:** GitHub renders the notebook with all plots inline; if its viewer
@@ -116,6 +128,7 @@ and run all cells — Colab installs the package and gives you a live kernel.
 | `plant` | Balance of plant: parasitic loads (air-cooled-condenser fans, brine pumping), ambient-set condensing, `evaluate_plant` (gross → net-to-grid), `seasonal_performance`, off-design operation (`design_plant`, `off_design_operation`, `decline_curves`), and the `pinch_area_tradeoff`. |
 | `mixtures` | Zeotropic working-fluid mixtures with temperature glide: `MixtureCycle` (built on P-T/P-Q flashes since CoolProp lacks mixture P-H/P-S), glide helpers, and `screen_compositions`. |
 | `transcritical` | `TranscriticalCycle`: supercritical heat addition (no evaporation plateau) with subcritical condensing, for resources whose hot end a subcritical fluid cannot reach. |
+| `economics` | Techno-economics: Turton module costing of every component (CEPCI-updated), geothermal well costs, and `levelized_cost` → LCOE, plus `pinch_lcoe_tradeoff` (cost-optimal vs power-optimal design) and `lcoe_sensitivity`. |
 
 State-point numbering follows DiPippo (2016): **1** condenser outlet / pump
 inlet, **2** pump outlet, **3** evaporator outlet / turbine inlet, **4** turbine
@@ -129,12 +142,13 @@ outlet / condenser inlet.
 pytest -q
 ```
 
-The suite is **141 tests** and targets correctness rather than coverage theatre:
+The suite is **150 tests** and targets correctness rather than coverage theatre:
 energy- and exergy-balance closure on resource-coupled solves, pinch behaviour
 across phase change, silica-correlation values against the literature, the
 classifier's wet/dry/isentropic verdicts, optimizer feasibility/ranking,
 parasitic and off-design plant behaviour, recuperator/pressure-drop/mixture/
-transcritical physics, and a `test_benchmarks.py` suite that pins headline
+transcritical physics, techno-economic LCOE in the published range with the
+right cost structure, and a `test_benchmarks.py` suite that pins headline
 numbers to published values.
 
 > Performance note: `solve_with_resource` precomputes the (flow-independent)
@@ -192,19 +206,24 @@ named plant):
 
 The core cycle now spans subcritical and transcritical operation, pure fluids
 and zeotropic mixtures, with an optional recuperator, heat-exchanger pressure
-drops, a reduced balance-of-plant, and off-design behaviour. What it **models**:
+drops, a reduced balance-of-plant, off-design behaviour, and a techno-economic
+LCOE layer. What it **models**:
 
 - Subcritical and **transcritical** cycles; **pure fluids and zeotropic
   mixtures** (temperature glide); optional **recuperator**; heat-exchanger
   **pressure drops**; the **pinch/area** (UA) trade-off.
 - Parasitics and ambient-set condensing (gross → net-to-grid), seasonal output,
   and fixed-hardware **off-design** decline.
+- **Techno-economics:** component sizing and Turton module costing, geothermal
+  well costs, **LCOE**, and the **cost-optimal vs power-optimal** design question
+  (how much heat-exchanger area is worth buying).
 
 Deliberate simplifications that remain:
 
-- **No techno-economics.** Power is the objective; LCOE and a cost-optimal (vs
-  power-optimal) design — including how much heat-exchanger area to buy — are not
-  yet modelled.
+- **First-order costing.** Turton module costing with material/pressure factors
+  held at a carbon-steel, low-pressure baseline; well count, well cost, O&M, and
+  discount rate are documented, adjustable assumptions, not a financed project
+  model (no debt/equity split, tax, depreciation, or escalation).
 - **Reduced off-design.** A Stodola swallowing law plus fixed UA and an
   illustrative part-load turbine curve, not a manufacturer's component map.
 - **Mixture comparison anchored on mean condensing temperature** (a fair proxy);
@@ -213,10 +232,11 @@ Deliberate simplifications that remain:
   (binary's pressurized, no-flash operation does suppress calcite).
 - **Empirical decline**; reservoir-scale thermal breakthrough is out of scope.
 
-Roadmap status: parasitics, ambient/seasonal, and off-design (Tier 1) and the
+Roadmap status: parasitics, ambient/seasonal, and off-design (Tier 1), the
 fidelity layer — recuperation, pressure drops, mixtures, transcritical (Tier 2) —
-are **done**; a techno-economic/LCOE layer and a fully cooling-water-matched
-condenser are the natural next steps.
+and the techno-economic LCOE layer (Tier 3) are **done**; a fully
+cooling-water-matched condenser and a financed-project model (debt/equity, tax,
+escalation) are the natural next steps.
 
 ---
 
@@ -241,6 +261,15 @@ condenser are the natural next steps.
 - W. Su et al., "A limiting efficiency of subcritical Organic Rankine cycle under
   the constraint of working fluids," *Energy* (2018) — subcritical ORC thermal
   efficiency ~10%, below 50% of Carnot perfectness.
+- R. Turton, R. C. Bailie, W. B. Whiting, J. A. Shaeiwitz, *Analysis, Synthesis
+  and Design of Chemical Processes*, Prentice Hall — module-costing method and
+  equipment cost correlations (USD 2001 basis, updated via CEPCI).
+- F. Yang et al., "Thermo-economic optimization of organic Rankine cycle systems
+  for geothermal power generation," *Front. Energy Res.* 8 (2020) 6 — finds
+  recuperation economically unattractive (extra exchanger cost outweighs the
+  gain) and transcritical cycles favoured, validating the Tier 2/3 findings.
+- Lazard, *Levelized Cost of Energy+*, and IRENA, *Renewable Power Generation
+  Costs* — geothermal LCOE benchmark (~$60–150/MWh for medium-temperature binary).
 
 ---
 
